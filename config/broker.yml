@@ -1,0 +1,122 @@
+# =============================================================================
+# Session Broker Configuration
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# User Synchronization
+# -----------------------------------------------------------------------------
+sync:
+  # Sync interval in seconds
+  interval: 10
+
+  # Users to ignore during sync (system accounts)
+  ignored_users:
+    - guacadmin
+
+  # Force update existing connections on broker restart
+  # When true, all existing Guacamole connections will be updated
+  # with current config (recording settings, connection name, etc.)
+  sync_config_on_restart: true
+
+# -----------------------------------------------------------------------------
+# VNC Containers
+# -----------------------------------------------------------------------------
+containers:
+  # Docker image for VNC containers
+  # Available images from ghcr.io/maximewewer/docker-browser-vnc:
+  #   - 2026.01.1-firefox   (Firefox ESR)
+  #   - 2026.01.1-chromium  (Chromium)
+  # The broker auto-detects the browser type from the image name
+  image: ghcr.io/maximewewer/docker-browser-vnc:2026.01.2-chromium
+
+  # Connection name displayed in Guacamole
+  connection_name: "Virtual Desktop"
+
+  # Docker network for VNC containers
+  network: guacamole_vnc-network
+
+  # Memory limit per container (1g for web browsing, 2g for heavy apps)
+  memory_limit: "1g"
+
+  # Shared memory size (128m minimum for browsers)
+  shm_size: "256m"
+
+  # Timeout in seconds to wait for VNC to be ready
+  vnc_timeout: 30
+
+# -----------------------------------------------------------------------------
+# Container Lifecycle Management
+# -----------------------------------------------------------------------------
+lifecycle:
+  # Keep containers running after user disconnects
+  persist_after_disconnect: true
+
+  # Idle timeout in minutes (after disconnect)
+  # Container destroyed after this delay of inactivity
+  idle_timeout_minutes: 3
+
+  # Force kill oldest inactive containers when resources are low
+  force_kill_on_low_resources: true
+
+# -----------------------------------------------------------------------------
+# Container Pool (Pre-warming)
+# -----------------------------------------------------------------------------
+pool:
+  # Enable container pre-warming
+  enabled: true
+
+  # Containers to start at broker startup
+  init_containers: 2
+
+  # Maximum number of containers
+  max_containers: 10
+
+  # Containers to start per sync cycle
+  batch_size: 3
+
+  # Resource limits
+  resources:
+    # Minimum free RAM required to start a new container (GB)
+    min_free_memory_gb: 2.0
+
+    # Maximum total RAM for all VNC containers (GB), 0 = no limit
+    max_total_memory_gb: 16.0
+
+    # Maximum percentage of total RAM, 0 = no limit
+    max_memory_percent: 0.75
+
+# -----------------------------------------------------------------------------
+# Guacamole Interface
+# -----------------------------------------------------------------------------
+guacamole:
+  # Force display of home page instead of auto-connecting
+  force_home_page: true
+
+  # Name of the placeholder home connection
+  home_connection_name: "Home"
+
+  # Session recording (screen capture)
+  recording:
+    # Enable session recording
+    enabled: true
+
+    # Path inside guacd container where recordings are stored
+    # Use ${HISTORY_PATH}/${HISTORY_UUID} for Guacamole playback integration
+    path: "${HISTORY_PATH}/${HISTORY_UUID}"
+
+    # Recording filename pattern (supports: ${GUAC_USERNAME}, ${GUAC_DATE}, ${GUAC_TIME})
+    # Leave empty or use a descriptive name
+    name: ""
+
+    # Include keyboard input in recordings
+    include_keys: false
+
+    # Auto-create recording path if it doesn't exist
+    auto_create_path: true
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  level: INFO

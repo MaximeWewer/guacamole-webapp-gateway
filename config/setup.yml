@@ -1,0 +1,90 @@
+# =============================================================================
+# Guacamole Session Broker - Deployment Configuration
+# =============================================================================
+#
+# This file contains deployment/infrastructure settings used by setup.sh
+# to generate docker-compose.yml and nginx configuration.
+#
+# Runtime settings are in broker.yml (containers, lifecycle, pool, sync)
+# User profiles are in profiles.yml (bookmarks, homepage, autofill)
+#
+# Fields marked [REQUIRED] must be set before first run.
+# Fields marked [INTERACTIVE] will be prompted during ./setup.sh if empty.
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# PostgreSQL Database
+# -----------------------------------------------------------------------------
+database:
+  host: postgres
+  port: 5432
+  name: guacamole
+  user: guacamole
+  password: "guacamole"  # [REQUIRED] [INTERACTIVE]
+
+# -----------------------------------------------------------------------------
+# Guacamole Application
+# -----------------------------------------------------------------------------
+guacamole:
+  admin_user: guacadmin
+  admin_password: "guacadmin"  # [REQUIRED] [INTERACTIVE]
+
+# -----------------------------------------------------------------------------
+# Container Versions
+# -----------------------------------------------------------------------------
+# Note: VNC container image is defined in broker.yml (containers.image)
+versions:
+  guacamole: "1.6.0"
+  guacd: "1.6.0"
+  postgres: "15-alpine"
+  nginx: "1.27-alpine"
+
+# -----------------------------------------------------------------------------
+# SSL/TLS Configuration
+# -----------------------------------------------------------------------------
+ssl:
+  # Certificate mode: "selfsigned" or "letsencrypt"
+  mode: selfsigned  # [INTERACTIVE]
+
+  # Security profile: "modern" (TLSv1.3) or "intermediate" (TLSv1.2+)
+  profile: modern  # [INTERACTIVE]
+
+  # DNS resolvers for OCSP stapling
+  resolver: "1.1.1.1 8.8.8.8"
+
+  # Let's Encrypt settings (required if mode: letsencrypt)
+  domain: ""  # [INTERACTIVE if letsencrypt]
+  email: ""   # [INTERACTIVE if letsencrypt]
+
+# -----------------------------------------------------------------------------
+# Nginx / URL Configuration
+# -----------------------------------------------------------------------------
+nginx:
+  # URL mode: "path" or "subdomain"
+  url_mode: path  # [INTERACTIVE]
+
+  # Path mode: base path (must start and end with "/")
+  base_path: "/"  # [INTERACTIVE if path mode]
+
+  # Subdomain mode: subdomain prefix (without dot)
+  # subdomain: "guacamole"  # [INTERACTIVE if subdomain mode]
+
+# -----------------------------------------------------------------------------
+# Vault Integration (Optional)
+# -----------------------------------------------------------------------------
+vault:
+  enabled: false
+  address: ""
+  token: ""
+  role_id: ""
+  secret_id: ""
+  mount: "secret"
+  path: "guacamole/broker"
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+logging:
+  # Guacd log level: error, warning, info, debug, trace
+  guacd_level: info

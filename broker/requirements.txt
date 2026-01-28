@@ -1,0 +1,15 @@
+# Web framework
+flask
+gunicorn
+
+# Docker SDK
+docker
+
+# HTTP client
+requests
+
+# PostgreSQL
+psycopg2-binary
+
+# YAML config
+pyyaml

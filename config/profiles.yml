@@ -1,0 +1,74 @@
+# =============================================================================
+# User Profiles Configuration
+# =============================================================================
+# Define profiles for user groups. Each profile can specify:
+#   - homepage: Browser start page URL
+#   - bookmarks: List of bookmarks (name + url)
+#   - autofill: Auto-fill credentials for specific URLs
+#   - description: Profile description
+#   - priority: Priority level (0 = lowest, higher wins)
+#
+# The browser type (Firefox/Chromium) is determined by the container image
+# configured in broker.yml. Profiles are browser-agnostic.
+# =============================================================================
+
+default:
+  description: "Default profile for all users"
+  priority: 0
+  homepage: "https://www.google.com"
+  bookmarks:
+    - name: "Google"
+      url: "https://www.google.com"
+    - name: "DuckDuckGo"
+      url: "https://duckduckgo.com"
+
+# =============================================================================
+# Example Profiles
+# =============================================================================
+#
+# developers:
+#   description: "Development team"
+#   priority: 10
+#   homepage: "https://github.com"
+#   bookmarks:
+#     - name: "GitHub"
+#       url: "https://github.com"
+#     - name: "Stack Overflow"
+#       url: "https://stackoverflow.com"
+#     - name: "DevDocs"
+#       url: "https://devdocs.io"
+#   autofill:
+#     - url: "https://github.com/login"
+#       username: "${GUAC_USERNAME}"
+#       password: "${vault:github_password}"
+#
+# marketing:
+#   description: "Marketing team"
+#   priority: 5
+#   homepage: "https://analytics.google.com"
+#   bookmarks:
+#     - name: "Google Analytics"
+#       url: "https://analytics.google.com"
+#     - name: "Google Ads"
+#       url: "https://ads.google.com"
+#
+# intranet:
+#   description: "Intranet access"
+#   priority: 5
+#   homepage: "https://intranet.company.com"
+#   bookmarks:
+#     - name: "Intranet"
+#       url: "https://intranet.company.com"
+#     - name: "Webmail"
+#       url: "https://mail.company.com"
+#   autofill:
+#     - url: "https://intranet.company.com/login"
+#       username: "${GUAC_USERNAME}"
+#       password: "${vault:intranet_password}"
+
+# =============================================================================
+# Autofill Variables
+# =============================================================================
+# ${GUAC_USERNAME}  - Guacamole username of the connected user
+# ${vault:key}      - Secret from Vault (requires VAULT_ADDR configured)
+# ${env:VAR}        - Environment variable from the broker container
