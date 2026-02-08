@@ -9,6 +9,7 @@ import time
 from broker.config.loader import BrokerConfig
 from broker.domain.session import SessionStore
 from broker.domain.container import destroy_container
+from broker.resilience import CircuitOpenError
 from broker.services.provisioning import on_connection_start, on_connection_end
 
 logger = logging.getLogger("session-broker")
@@ -29,6 +30,13 @@ class ConnectionMonitor:
         self._active_connections: set = set()
         self._running = False
         self._cleanup_counter = 0
+        self._stop_event = threading.Event()
+
+    @property
+    def running(self) -> bool:
+        """Whether the monitor loop is running."""
+        with self._lock:
+            return self._running
 
     @property
     def active_connections(self) -> set:
@@ -40,16 +48,20 @@ class ConnectionMonitor:
         """Start the monitor service."""
         with self._lock:
             self._running = True
+        self._stop_event.clear()
         threading.Thread(target=self._monitor_loop, daemon=True).start()
         logger.info("Connection monitor started")
 
+    def stop(self) -> None:
+        """Stop the monitor service gracefully."""
+        with self._lock:
+            self._running = False
+        self._stop_event.set()
+        logger.info("Connection monitor stop requested")
+
     def _monitor_loop(self) -> None:
         """Main monitor loop."""
-        while True:
-            with self._lock:
-                if not self._running:
-                    break
-
+        while not self._stop_event.is_set():
             try:
                 from broker.container import get_services
                 guac_api = get_services().guac_api
@@ -87,9 +99,14 @@ class ConnectionMonitor:
                 # Run cleanup every 60 iterations (~5 minutes with 5s interval)
                 if should_cleanup:
                     self.cleanup_inactive_containers()
+            except CircuitOpenError as e:
+                backoff = max(self.interval, e.retry_after)
+                logger.warning(f"Monitor: circuit open, backing off {backoff:.0f}s")
+                self._stop_event.wait(backoff)
+                continue
             except Exception as e:
                 logger.error(f"Monitor error: {e}")
-            time.sleep(self.interval)
+            self._stop_event.wait(self.interval)
 
     def cleanup_inactive_containers(self) -> None:
         """

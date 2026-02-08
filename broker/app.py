@@ -10,12 +10,14 @@ This service manages the lifecycle of VNC containers for Guacamole users:
 - Persists Firefox bookmarks and wallpaper between sessions
 - Secret management via Vault (OpenBao/HashiCorp) or environment variables
 - Session and group storage in PostgreSQL
-- Network isolation via Docker networks
+- Network isolation
 """
 
+import atexit
 import logging
 import os
 import re
+import signal
 
 from flask import Flask
 
@@ -175,6 +177,18 @@ container.user_sync.start()
 # Initialize container pool at startup
 container.user_sync.init_pool()
 container.monitor.start()
+
+# =============================================================================
+# Graceful Shutdown
+# =============================================================================
+
+def _shutdown_handler(signum: int | None = None, frame: object = None) -> None:
+    logger.info(f"Shutdown initiated (signal={signum})")
+    container.shutdown()
+
+atexit.register(_shutdown_handler)
+signal.signal(signal.SIGTERM, _shutdown_handler)
+signal.signal(signal.SIGINT, _shutdown_handler)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)

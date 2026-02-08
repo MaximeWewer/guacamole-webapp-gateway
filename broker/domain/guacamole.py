@@ -2,11 +2,16 @@
 Guacamole API client for REST operations.
 """
 
+from __future__ import annotations
+
 import logging
 import threading
 import time
+from typing import Any, Callable
 
 import requests
+
+from broker.resilience import CircuitBreaker, CircuitOpenError, CircuitState
 
 logger = logging.getLogger("session-broker")
 
@@ -14,7 +19,13 @@ logger = logging.getLogger("session-broker")
 class GuacamoleAPI:
     """Client for Guacamole REST API."""
 
-    def __init__(self, base_url: str, username: str, password: str):
+    def __init__(
+        self,
+        base_url: str,
+        username: str,
+        password: str,
+        circuit_breaker: CircuitBreaker | None = None,
+    ):
         """
         Initialize Guacamole API client.
 
@@ -22,6 +33,7 @@ class GuacamoleAPI:
             base_url: Guacamole base URL
             username: Admin username
             password: Admin password
+            circuit_breaker: Optional pre-built CircuitBreaker (defaults to a new one)
         """
         self.base_url = base_url.rstrip("/")
         self.username = username
@@ -30,6 +42,16 @@ class GuacamoleAPI:
         self.token_expires: float = 0
         self.data_source = "postgresql"
         self._lock = threading.Lock()
+        self._circuit = circuit_breaker or CircuitBreaker(name="guacamole")
+
+    @property
+    def circuit_healthy(self) -> bool:
+        """Whether the Guacamole circuit breaker is CLOSED (healthy)."""
+        return self._circuit.state == CircuitState.CLOSED
+
+    def _request(self, method: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """Execute an HTTP request through the circuit breaker."""
+        return self._circuit.call(method, *args, **kwargs)
 
     def authenticate(self) -> str:
         """
@@ -38,10 +60,11 @@ class GuacamoleAPI:
         Returns:
             Authentication token
         """
-        resp = requests.post(
+        resp = self._request(
+            requests.post,
             f"{self.base_url}/api/tokens",
             data={"username": self.username, "password": self.password},
-            timeout=10
+            timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -71,10 +94,11 @@ class GuacamoleAPI:
             List of usernames
         """
         token, ds = self._get_auth_params()
-        resp = requests.get(
+        resp = self._request(
+            requests.get,
             f"{self.base_url}/api/session/data/{ds}/users",
             params={"token": token},
-            timeout=10
+            timeout=10,
         )
         resp.raise_for_status()
         return list(resp.json().keys())
@@ -90,10 +114,11 @@ class GuacamoleAPI:
             List of group names
         """
         token, ds = self._get_auth_params()
-        resp = requests.get(
+        resp = self._request(
+            requests.get,
             f"{self.base_url}/api/session/data/{ds}/users/{username}/userGroups",
             params={"token": token},
-            timeout=10
+            timeout=10,
         )
         resp.raise_for_status()
         return resp.json()
@@ -106,10 +131,11 @@ class GuacamoleAPI:
             Dictionary of group data
         """
         token, ds = self._get_auth_params()
-        resp = requests.get(
+        resp = self._request(
+            requests.get,
             f"{self.base_url}/api/session/data/{ds}/userGroups",
             params={"token": token},
-            timeout=10
+            timeout=10,
         )
         resp.raise_for_status()
         return resp.json()
@@ -165,11 +191,12 @@ class GuacamoleAPI:
             "parameters": parameters,
             "attributes": {"max-connections": "1", "max-connections-per-user": "1"}
         }
-        resp = requests.post(
+        resp = self._request(
+            requests.post,
             f"{self.base_url}/api/session/data/{ds}/connections",
             params={"token": token},
             json=connection_data,
-            timeout=10
+            timeout=10,
         )
         resp.raise_for_status()
         return resp.json()["identifier"]
@@ -186,19 +213,21 @@ class GuacamoleAPI:
         """
         token, ds = self._get_auth_params()
         # Get connection details
-        resp = requests.get(
+        resp = self._request(
+            requests.get,
             f"{self.base_url}/api/session/data/{ds}/connections/{conn_id}",
             params={"token": token},
-            timeout=10
+            timeout=10,
         )
         resp.raise_for_status()
         connection = resp.json()
 
         # Get existing parameters separately
-        params_resp = requests.get(
+        params_resp = self._request(
+            requests.get,
             f"{self.base_url}/api/session/data/{ds}/connections/{conn_id}/parameters",
             params={"token": token},
-            timeout=10
+            timeout=10,
         )
         params_resp.raise_for_status()
         parameters = params_resp.json()
@@ -211,11 +240,12 @@ class GuacamoleAPI:
         })
         connection["parameters"] = parameters
 
-        requests.put(
+        self._request(
+            requests.put,
             f"{self.base_url}/api/session/data/{ds}/connections/{conn_id}",
             params={"token": token},
             json=connection,
-            timeout=10
+            timeout=10,
         )
 
     def sync_connection_config(self, conn_id: str, username: str = "") -> bool:
@@ -237,20 +267,22 @@ class GuacamoleAPI:
 
         try:
             # Get current connection
-            resp = requests.get(
+            resp = self._request(
+                requests.get,
                 f"{self.base_url}/api/session/data/{ds}/connections/{conn_id}",
                 params={"token": token},
-                timeout=10
+                timeout=10,
             )
             if resp.status_code != 200:
                 return False
             connection = resp.json()
 
             # Get existing parameters
-            params_resp = requests.get(
+            params_resp = self._request(
+                requests.get,
                 f"{self.base_url}/api/session/data/{ds}/connections/{conn_id}/parameters",
                 params={"token": token},
-                timeout=10
+                timeout=10,
             )
             params_resp.raise_for_status()
             parameters = params_resp.json()
@@ -285,16 +317,19 @@ class GuacamoleAPI:
             connection["parameters"] = parameters
 
             # Update connection
-            resp = requests.put(
+            resp = self._request(
+                requests.put,
                 f"{self.base_url}/api/session/data/{ds}/connections/{conn_id}",
                 params={"token": token},
                 json=connection,
-                timeout=10
+                timeout=10,
             )
             resp.raise_for_status()
             logger.info(f"Synced config for connection {conn_id} (user: {username})")
             return True
 
+        except CircuitOpenError:
+            raise
         except Exception as e:
             logger.warning(f"Failed to sync config for connection {conn_id}: {e}")
             return False
@@ -307,10 +342,11 @@ class GuacamoleAPI:
             conn_id: Connection identifier
         """
         token, ds = self._get_auth_params()
-        requests.delete(
+        self._request(
+            requests.delete,
             f"{self.base_url}/api/session/data/{ds}/connections/{conn_id}",
             params={"token": token},
-            timeout=10
+            timeout=10,
         )
 
     def grant_connection_permission(self, username: str, conn_id: str) -> None:
@@ -323,11 +359,12 @@ class GuacamoleAPI:
         """
         token, ds = self._get_auth_params()
         permissions = [{"op": "add", "path": f"/connectionPermissions/{conn_id}", "value": "READ"}]
-        requests.patch(
+        self._request(
+            requests.patch,
             f"{self.base_url}/api/session/data/{ds}/users/{username}/permissions",
             params={"token": token},
             json=permissions,
-            timeout=10
+            timeout=10,
         )
 
     def create_home_connection(self, username: str) -> str | None:
@@ -353,6 +390,8 @@ class GuacamoleAPI:
             for conn_id, conn in conns.items():
                 if conn.get("name") == conn_name:
                     return None  # Already exists
+        except CircuitOpenError:
+            raise
         except Exception:
             pass
 
@@ -372,16 +411,19 @@ class GuacamoleAPI:
             }
         }
         try:
-            resp = requests.post(
+            resp = self._request(
+                requests.post,
                 f"{self.base_url}/api/session/data/{ds}/connections",
                 params={"token": token},
                 json=connection_data,
-                timeout=10
+                timeout=10,
             )
             if resp.status_code in (200, 201):
                 conn_id = resp.json().get("identifier")
                 self.grant_connection_permission(username, conn_id)
                 return conn_id
+        except CircuitOpenError:
+            raise
         except Exception as e:
             logger.warning(f"Could not create home connection for {username}: {e}")
         return None
@@ -394,10 +436,11 @@ class GuacamoleAPI:
             Dictionary of connections {id: connection_data}
         """
         token, ds = self._get_auth_params()
-        resp = requests.get(
+        resp = self._request(
+            requests.get,
             f"{self.base_url}/api/session/data/{ds}/connections",
             params={"token": token},
-            timeout=10
+            timeout=10,
         )
         if resp.status_code == 200:
             return resp.json()
@@ -411,10 +454,11 @@ class GuacamoleAPI:
             Dictionary of active connections
         """
         token, ds = self._get_auth_params()
-        resp = requests.get(
+        resp = self._request(
+            requests.get,
             f"{self.base_url}/api/session/data/{ds}/activeConnections",
             params={"token": token},
-            timeout=10
+            timeout=10,
         )
         resp.raise_for_status()
         return resp.json()

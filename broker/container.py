@@ -59,6 +59,13 @@ class ServiceContainer:
             self._monitor = ConnectionMonitor(interval=5)
         return self._monitor
 
+    def shutdown(self) -> None:
+        """Stop all background services gracefully."""
+        if self._user_sync is not None:
+            self._user_sync.stop()
+        if self._monitor is not None:
+            self._monitor.stop()
+
 
 # Fallback for background threads (set once at startup in app.py)
 _global_container: ServiceContainer | None = None

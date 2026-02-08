@@ -16,13 +16,16 @@ from broker.domain.types import SessionData
 class TestHealth:
 
     def test_health_ok(self, app_client, mocker):
-        """GET /health → 200, database=true."""
+        """GET /health → 200, healthy with all services up."""
         mocker.patch("broker.api.routes.get_db_connection")
         resp = app_client.get("/health")
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["status"] == "healthy"
         assert data["database"] is True
+        assert data["guacamole"] is True
+        assert data["services"]["monitor"] is True
+        assert data["services"]["user_sync"] is True
 
     def test_health_no_auth_needed(self, app_client, mocker):
         """GET /health without API key → still 200."""
@@ -33,13 +36,33 @@ class TestHealth:
         assert resp.status_code in (200, 503)  # 503 if DB mock not set up
 
     def test_health_db_down(self, app_client, mocker):
-        """GET /health with DB failure → 503, degraded."""
+        """GET /health with DB failure → 503, unhealthy."""
         mocker.patch("broker.api.routes.get_db_connection", side_effect=Exception("DB down"))
         resp = app_client.get("/health")
         assert resp.status_code == 503
         data = resp.get_json()
-        assert data["status"] == "degraded"
+        assert data["status"] == "unhealthy"
         assert data["database"] is False
+
+    def test_health_guacamole_circuit_open(self, app_client, mocker, mock_services):
+        """Guacamole circuit open → 503, unhealthy."""
+        mocker.patch("broker.api.routes.get_db_connection")
+        mock_services._guac_api.circuit_healthy = False
+        resp = app_client.get("/health")
+        assert resp.status_code == 503
+        data = resp.get_json()
+        assert data["status"] == "unhealthy"
+        assert data["guacamole"] is False
+
+    def test_health_service_stopped_degraded(self, app_client, mocker, mock_services):
+        """Background service stopped → 200, degraded."""
+        mocker.patch("broker.api.routes.get_db_connection")
+        mock_services._monitor.running = False
+        resp = app_client.get("/health")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "degraded"
+        assert data["services"]["monitor"] is False
 
 
 # ---------------------------------------------------------------------------

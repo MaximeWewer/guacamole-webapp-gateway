@@ -94,6 +94,7 @@ def mock_guac_api(mocker):
     mock_api.create_home_connection.return_value = "99"
     mock_api.get_connections.return_value = {}
     mock_api.get_active_connections.return_value = {}
+    mock_api.circuit_healthy = True
 
     return mock_api
 
@@ -118,11 +119,15 @@ def mock_services(mocker, mock_guac_api):
     mock_user_sync.get_stats = MagicMock(return_value={
         "last_sync": None, "total_synced": 0, "errors": 0,
     })
+    mock_user_sync.running = True
+    mock_user_sync.stop = MagicMock()
     container._user_sync = mock_user_sync
 
     mock_monitor = MagicMock()
     mock_monitor.start = MagicMock()
     mock_monitor.active_connections = set()
+    mock_monitor.running = True
+    mock_monitor.stop = MagicMock()
     container._monitor = mock_monitor
 
     # Inject as global fallback

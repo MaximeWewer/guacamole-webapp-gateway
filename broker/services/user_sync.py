@@ -20,6 +20,7 @@ from broker.domain.container import (
     generate_vnc_password,
 )
 from broker.domain.orchestrator import get_orchestrator
+from broker.resilience import CircuitOpenError
 from broker.services.provisioning import provision_user_connection
 
 logger = logging.getLogger("session-broker")
@@ -40,6 +41,7 @@ class UserSyncService:
         self.last_sync: float = 0
         self.sync_stats: dict[str, Any] = {"total_synced": 0, "last_new_users": [], "errors": 0}
         self._lock = threading.Lock()
+        self._stop_event = threading.Event()
 
     @property
     def running(self) -> bool:
@@ -54,12 +56,21 @@ class UserSyncService:
     def start(self) -> None:
         """Start the sync service."""
         self.running = True
+        self._stop_event.clear()
         threading.Thread(target=self._sync_loop, daemon=True).start()
         logger.info(f"User sync service started (interval: {self.interval}s)")
 
+    def stop(self) -> None:
+        """Stop the sync service gracefully."""
+        self.running = False
+        self._stop_event.set()
+        logger.info("User sync service stop requested")
+
     def _sync_loop(self) -> None:
         """Main sync loop."""
-        time.sleep(10)  # Initial delay
+        self._stop_event.wait(10)  # Initial delay
+        if self._stop_event.is_set():
+            return
         while self.running:
             try:
                 new_users = self.sync_users()
@@ -70,11 +81,16 @@ class UserSyncService:
                 prewarm_enabled = BrokerConfig.settings().pool.enabled
                 if prewarm_enabled:
                     self.prewarm_containers()
+            except CircuitOpenError as e:
+                backoff = max(self.interval, e.retry_after)
+                logger.warning(f"Sync: circuit open, backing off {backoff:.0f}s")
+                self._stop_event.wait(backoff)
+                continue
             except Exception as e:
                 logger.error(f"Sync error: {e}")
                 with self._lock:
                     self.sync_stats["errors"] += 1
-            time.sleep(self.interval)
+            self._stop_event.wait(self.interval)
 
     def get_running_container_count(self) -> int:
         """Get count of running VNC containers/pods."""

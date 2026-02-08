@@ -54,6 +54,9 @@ DATABASE_NAME = get_env("database_name", "guacamole")
 @limiter.exempt
 def health() -> RouteResponse:
     """Health check endpoint."""
+    from flask import jsonify
+
+    # 1. Database
     db_ok = False
     try:
         with get_db_connection() as conn:
@@ -63,13 +66,27 @@ def health() -> RouteResponse:
     except Exception:
         pass
 
-    from flask import jsonify
-    status = "healthy" if db_ok else "degraded"
+    # 2. Guacamole circuit breaker (local check, no network call)
+    guac_ok = get_services().guac_api.circuit_healthy
+
+    # 3. Background services
+    monitor_ok = get_services().monitor.running
+    sync_ok = get_services().user_sync.running
+
+    # Determine status
+    all_critical = db_ok and guac_ok
+    all_ok = all_critical and monitor_ok and sync_ok
+
+    status = "healthy" if all_ok else ("degraded" if all_critical else "unhealthy")
+    code = 200 if all_critical else 503
+
     return jsonify({
         "status": status,
         "database": db_ok,
-        "vault": secrets_provider.use_vault
-    }), 200 if db_ok else 503
+        "guacamole": guac_ok,
+        "services": {"monitor": monitor_ok, "user_sync": sync_ok},
+        "vault": secrets_provider.use_vault,
+    }), code
 
 
 @api.route("/api/secrets/status")
