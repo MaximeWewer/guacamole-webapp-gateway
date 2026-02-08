@@ -55,6 +55,10 @@ logger.addFilter(SensitiveDataFilter())
 
 app = Flask(__name__)
 
+# Initialize rate limiter
+from broker.api.rate_limit import init_limiter
+init_limiter(app)
+
 # =============================================================================
 # Import and Initialize Modules
 # =============================================================================

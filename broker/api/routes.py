@@ -17,6 +17,8 @@ from broker.api.validators import (
     validate_url,
 )
 from broker.api.responses import api_success, api_error
+from broker.api.rate_limit import limiter, admin_limit
+from broker.api.audit import audit_log_response
 from broker.domain.session import SessionStore
 from broker.domain.guacamole import guac_api
 from broker.domain.user_profile import UserProfile
@@ -32,6 +34,7 @@ api = Blueprint("api", __name__)
 
 from broker.api.auth import require_api_key
 api.before_request(require_api_key)
+api.after_request(audit_log_response)
 
 # Configuration values for API
 GUACD_HOSTNAME = get_env("guacd_hostname", "guacd")
@@ -44,6 +47,7 @@ DATABASE_NAME = get_env("database_name", "guacamole")
 # =============================================================================
 
 @api.route("/health")
+@limiter.exempt
 def health():
     """Health check endpoint."""
     db_ok = False
@@ -103,6 +107,7 @@ def list_sessions():
 
 
 @api.route("/api/sessions/<session_id>", methods=["DELETE"])
+@limiter.limit(lambda: admin_limit)
 def force_cleanup(session_id: str):
     """Force cleanup a session."""
     session = SessionStore.get_session(session_id)
@@ -128,6 +133,7 @@ def get_sync_status():
 
 
 @api.route("/api/sync", methods=["POST"])
+@limiter.limit(lambda: admin_limit)
 def trigger_sync():
     """Trigger manual user sync."""
     new_users = user_sync.sync_users()
@@ -139,6 +145,7 @@ def trigger_sync():
 # =============================================================================
 
 @api.route("/api/users/<username>/provision", methods=["POST"])
+@limiter.limit(lambda: admin_limit)
 def provision_user(username: str):
     """Provision a user connection."""
     try:
@@ -153,6 +160,7 @@ def provision_user(username: str):
 
 
 @api.route("/api/users/<username>/refresh-config", methods=["POST"])
+@limiter.limit(lambda: admin_limit)
 def refresh_user_config(username: str):
     """Refresh user configuration from groups."""
     try:
@@ -187,6 +195,7 @@ def get_user_groups_api(username: str):
 
 
 @api.route("/api/users/<username>/bookmarks", methods=["POST"])
+@limiter.limit(lambda: admin_limit)
 def add_user_bookmark(username: str):
     """Add a bookmark for user."""
     try:
@@ -258,6 +267,7 @@ def get_group(group_name: str):
 
 
 @api.route("/api/groups/<group_name>", methods=["PUT"])
+@limiter.limit(lambda: admin_limit)
 def update_group_api(group_name: str):
     """Create or update a group."""
     try:
@@ -283,6 +293,7 @@ def update_group_api(group_name: str):
 
 
 @api.route("/api/groups/<group_name>", methods=["DELETE"])
+@limiter.limit(lambda: admin_limit)
 def delete_group_api(group_name: str):
     """Delete a group."""
     try:
@@ -311,6 +322,7 @@ def get_settings():
 
 
 @api.route("/api/settings", methods=["PUT"])
+@limiter.limit(lambda: admin_limit)
 def update_settings():
     """Update broker settings."""
     data = request.get_json() or {}

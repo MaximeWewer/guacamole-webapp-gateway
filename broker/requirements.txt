@@ -16,3 +16,6 @@ psycopg2-binary
 
 # YAML config
 pyyaml
+
+# Rate limiting
+flask-limiter

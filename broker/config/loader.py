@@ -102,7 +102,14 @@ class BrokerConfig:
                     "auto_create_path": True
                 }
             },
-            "security": {"api_key": ""},
+            "security": {
+                "api_key": "",
+                "rate_limiting": {
+                    "enabled": True,
+                    "default_limit": "200/minute",
+                    "admin_limit": "10/minute"
+                }
+            },
             "logging": {"level": "INFO"}
         }
 
