@@ -54,10 +54,11 @@ def init_database() -> None:
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             # Sessions table
+            # Note: username can be NULL for pool containers (pre-warmed, unclaimed)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS broker_sessions (
                     session_id VARCHAR(36) PRIMARY KEY,
-                    username VARCHAR(255) NOT NULL UNIQUE,
+                    username VARCHAR(255),
                     guac_connection_id VARCHAR(36),
                     vnc_password VARCHAR(64),
                     container_id VARCHAR(64),
@@ -73,6 +74,22 @@ def init_database() -> None:
             cur.execute("""
                 ALTER TABLE broker_sessions
                 ADD COLUMN IF NOT EXISTS last_activity TIMESTAMP
+            """)
+
+            # Migration: remove NOT NULL and UNIQUE constraint from username column
+            # to support pool containers with NULL username
+            cur.execute("""
+                ALTER TABLE broker_sessions
+                ALTER COLUMN username DROP NOT NULL
+            """)
+            # Drop the unique constraint if it exists
+            cur.execute("""
+                DO $$
+                BEGIN
+                    ALTER TABLE broker_sessions DROP CONSTRAINT IF EXISTS broker_sessions_username_key;
+                EXCEPTION WHEN undefined_object THEN
+                    NULL;
+                END $$;
             """)
 
             # Groups table
@@ -112,6 +129,12 @@ def init_database() -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_sessions_username ON broker_sessions(username)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_sessions_connection ON broker_sessions(guac_connection_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_bookmarks_group ON broker_bookmarks(group_name)")
+
+            # Partial unique index: ensure non-null usernames are unique
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_username_unique
+                ON broker_sessions(username) WHERE username IS NOT NULL
+            """)
 
             # Initialize default settings
             cur.execute("""

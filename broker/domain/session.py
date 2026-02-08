@@ -26,12 +26,13 @@ class SessionStore:
                     (session_id, username, guac_connection_id, vnc_password, container_id, container_ip, created_at, started_at, last_activity, updated_at)
                     VALUES (%s, %s, %s, %s, %s, %s, to_timestamp(%s), to_timestamp(%s), to_timestamp(%s), CURRENT_TIMESTAMP)
                     ON CONFLICT (session_id) DO UPDATE SET
-                        guac_connection_id = EXCLUDED.guac_connection_id,
-                        vnc_password = EXCLUDED.vnc_password,
-                        container_id = EXCLUDED.container_id,
-                        container_ip = EXCLUDED.container_ip,
-                        started_at = EXCLUDED.started_at,
-                        last_activity = EXCLUDED.last_activity,
+                        username = COALESCE(EXCLUDED.username, broker_sessions.username),
+                        guac_connection_id = COALESCE(EXCLUDED.guac_connection_id, broker_sessions.guac_connection_id),
+                        vnc_password = COALESCE(EXCLUDED.vnc_password, broker_sessions.vnc_password),
+                        container_id = COALESCE(EXCLUDED.container_id, broker_sessions.container_id),
+                        container_ip = COALESCE(EXCLUDED.container_ip, broker_sessions.container_ip),
+                        started_at = COALESCE(EXCLUDED.started_at, broker_sessions.started_at),
+                        last_activity = COALESCE(EXCLUDED.last_activity, broker_sessions.last_activity),
                         updated_at = CURRENT_TIMESTAMP
                 """, (
                     session_id,
@@ -181,3 +182,54 @@ class SessionStore:
                 session["container_ip"] = None
                 result.append(session)
         return result
+
+    @staticmethod
+    def get_pool_sessions() -> list:
+        """
+        Get pool sessions (sessions without username, with running container).
+        These are pre-warmed containers ready to be claimed.
+
+        Returns:
+            List of pool session dictionaries
+        """
+        # Import here to avoid circular imports
+        from broker.domain.container import is_container_running
+
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT * FROM broker_sessions
+                    WHERE username IS NULL
+                    AND container_id IS NOT NULL
+                    ORDER BY created_at ASC
+                """)
+                sessions = [SessionStore._row_to_dict(row) for row in cur.fetchall()]
+
+        # Filter to sessions with running containers
+        result = []
+        for session in sessions:
+            container_id = session.get("container_id")
+            if container_id and is_container_running(container_id):
+                result.append(session)
+        return result
+
+    @staticmethod
+    def claim_pool_session(session_id: str, username: str) -> bool:
+        """
+        Claim a pool session for a specific user.
+
+        Args:
+            session_id: Pool session ID to claim
+            username: Username to assign
+
+        Returns:
+            True if claimed successfully, False otherwise
+        """
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE broker_sessions
+                    SET username = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE session_id = %s AND username IS NULL
+                """, (username, session_id))
+                return cur.rowcount > 0

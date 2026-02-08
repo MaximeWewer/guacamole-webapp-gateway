@@ -1,5 +1,5 @@
 # =============================================================================
-# User Profiles Configuration
+# User Profiles Configuration - Example File
 # =============================================================================
 # Define profiles for user groups. Each profile can specify:
 #   - homepage: Browser start page URL
@@ -10,6 +10,8 @@
 #
 # The browser type (Firefox/Chromium) is determined by the container image
 # configured in broker.yml. Profiles are browser-agnostic.
+#
+# When deploying with Helm, profiles are configured via values.yaml.
 # =============================================================================
 
 default:
@@ -67,8 +69,16 @@ default:
 #       password: "${vault:intranet_password}"
 
 # =============================================================================
-# Autofill Variables
+# Variable Expansion
 # =============================================================================
+# The following variables are supported in profile configuration:
+#
 # ${GUAC_USERNAME}  - Guacamole username of the connected user
-# ${vault:key}      - Secret from Vault (requires VAULT_ADDR configured)
+# ${vault:key}      - Secret from Vault/OpenBao (requires Vault integration)
 # ${env:VAR}        - Environment variable from the broker container
+#
+# Example with Vault integration:
+#   autofill:
+#     - url: "https://app.example.com/login"
+#       username: "${GUAC_USERNAME}@company.com"
+#       password: "${vault:app_password}"

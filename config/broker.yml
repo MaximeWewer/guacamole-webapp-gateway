@@ -1,6 +1,54 @@
 # =============================================================================
-# Session Broker Configuration
+# Session Broker Configuration - Example File
 # =============================================================================
+# This file serves as a reference for broker configuration.
+# When deploying with Helm, these settings are configured via values.yaml
+# and generated into a ConfigMap.
+#
+# For Docker Compose deployments, copy this file and modify as needed.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Container Orchestrator
+# -----------------------------------------------------------------------------
+orchestrator:
+  # Backend to use: "docker" or "kubernetes"
+  backend: docker
+
+  # Docker-specific settings (used when backend is docker)
+  docker:
+    network: guacamole_vnc-network
+
+  # Kubernetes-specific settings (used when backend is kubernetes)
+  kubernetes:
+    # Namespace for VNC pods
+    namespace: guacamole
+    # Service account for broker (needs pod create/delete permissions)
+    service_account: guacamole-broker
+    # Labels applied to all VNC pods
+    labels:
+      app: vnc-session
+      managed-by: guacamole-broker
+    # Image pull policy: Always, IfNotPresent, Never
+    image_pull_policy: IfNotPresent
+    # Image pull secrets (list of secret names)
+    image_pull_secrets: []
+    # Node selector for pod scheduling
+    node_selector: {}
+    # Tolerations for pod scheduling
+    tolerations: []
+    # Resource requests and limits for VNC pods
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
+    # Security context for VNC pods
+    security_context:
+      run_as_non_root: false
+      run_as_user: 1000
 
 # -----------------------------------------------------------------------------
 # User Synchronization
@@ -8,14 +56,10 @@
 sync:
   # Sync interval in seconds
   interval: 10
-
   # Users to ignore during sync (system accounts)
   ignored_users:
     - guacadmin
-
   # Force update existing connections on broker restart
-  # When true, all existing Guacamole connections will be updated
-  # with current config (recording settings, connection name, etc.)
   sync_config_on_restart: true
 
 # -----------------------------------------------------------------------------
@@ -24,23 +68,17 @@ sync:
 containers:
   # Docker image for VNC containers
   # Available images from ghcr.io/maximewewer/docker-browser-vnc:
-  #   - 2026.01.1-firefox   (Firefox ESR)
-  #   - 2026.01.1-chromium  (Chromium)
-  # The broker auto-detects the browser type from the image name
+  #   - 2026.01.2-firefox   (Firefox ESR)
+  #   - 2026.01.2-chromium  (Chromium)
   image: ghcr.io/maximewewer/docker-browser-vnc:2026.01.2-chromium
-
   # Connection name displayed in Guacamole
   connection_name: "Virtual Desktop"
-
-  # Docker network for VNC containers
+  # Docker network for VNC containers (Docker mode only)
   network: guacamole_vnc-network
-
-  # Memory limit per container (1g for web browsing, 2g for heavy apps)
+  # Memory limit per container (Docker mode only)
   memory_limit: "1g"
-
-  # Shared memory size (128m minimum for browsers)
+  # Shared memory size (Docker mode only)
   shm_size: "256m"
-
   # Timeout in seconds to wait for VNC to be ready
   vnc_timeout: 30
 
@@ -50,11 +88,8 @@ containers:
 lifecycle:
   # Keep containers running after user disconnects
   persist_after_disconnect: true
-
   # Idle timeout in minutes (after disconnect)
-  # Container destroyed after this delay of inactivity
   idle_timeout_minutes: 3
-
   # Force kill oldest inactive containers when resources are low
   force_kill_on_low_resources: true
 
@@ -64,24 +99,18 @@ lifecycle:
 pool:
   # Enable container pre-warming
   enabled: true
-
   # Containers to start at broker startup
   init_containers: 2
-
   # Maximum number of containers
   max_containers: 10
-
   # Containers to start per sync cycle
   batch_size: 3
-
   # Resource limits
   resources:
     # Minimum free RAM required to start a new container (GB)
     min_free_memory_gb: 2.0
-
     # Maximum total RAM for all VNC containers (GB), 0 = no limit
     max_total_memory_gb: 16.0
-
     # Maximum percentage of total RAM, 0 = no limit
     max_memory_percent: 0.75
 
@@ -91,26 +120,18 @@ pool:
 guacamole:
   # Force display of home page instead of auto-connecting
   force_home_page: true
-
   # Name of the placeholder home connection
   home_connection_name: "Home"
-
   # Session recording (screen capture)
   recording:
-    # Enable session recording
     enabled: true
-
-    # Path inside guacd container where recordings are stored
+    # Path inside guacd container
     # Use ${HISTORY_PATH}/${HISTORY_UUID} for Guacamole playback integration
     path: "${HISTORY_PATH}/${HISTORY_UUID}"
-
-    # Recording filename pattern (supports: ${GUAC_USERNAME}, ${GUAC_DATE}, ${GUAC_TIME})
-    # Leave empty or use a descriptive name
+    # Recording filename pattern
     name: ""
-
     # Include keyboard input in recordings
     include_keys: false
-
     # Auto-create recording path if it doesn't exist
     auto_create_path: true
 

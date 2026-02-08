@@ -17,6 +17,8 @@ from broker.domain.container import (
     wait_for_vnc,
     generate_vnc_password,
     is_container_running,
+    get_pool_containers,
+    claim_container,
 )
 
 logger = logging.getLogger("session-broker")
@@ -25,7 +27,7 @@ logger = logging.getLogger("session-broker")
 def provision_user_connection(username: str) -> str:
     """
     Provision a VNC connection for a user.
-    Starts the VNC container immediately so it's ready when user connects.
+    First tries to claim a container from the pool, otherwise creates a new one.
 
     Args:
         username: Username
@@ -38,9 +40,6 @@ def provision_user_connection(username: str) -> str:
     if existing and existing.get("guac_connection_id") and existing.get("container_id"):
         return existing["guac_connection_id"]
 
-    session_id = str(uuid.uuid4())[:SESSION_ID_LENGTH]
-    vnc_password = generate_vnc_password()
-
     UserProfile.ensure_profile(username)
 
     # Apply group configuration
@@ -51,10 +50,46 @@ def provision_user_connection(username: str) -> str:
     except Exception as e:
         logger.warning(f"Unable to get groups for {username}: {e}")
 
-    # Start VNC container immediately
-    container_id, container_ip = spawn_vnc_container(session_id, username, vnc_password)
+    # Try to claim a container from the pool first
+    pool_sessions = SessionStore.get_pool_sessions()
 
-    # Wait for VNC to be ready
+    container_id = None
+    container_ip = None
+    session_id = None
+    vnc_password = None
+    claimed_from_pool = False
+
+    # Try to claim from pool
+    for pool_session in pool_sessions:
+        pool_session_id = pool_session.get("session_id")
+        pool_container_id = pool_session.get("container_id")
+        pool_container_ip = pool_session.get("container_ip")
+        pool_vnc_password = pool_session.get("vnc_password")
+
+        # Try to claim the container in orchestrator first (updates labels)
+        if claim_container(pool_container_id, username):
+            # Then claim the session in database
+            if SessionStore.claim_pool_session(pool_session_id, username):
+                container_id = pool_container_id
+                container_ip = pool_container_ip
+                session_id = pool_session_id
+                vnc_password = pool_vnc_password
+                claimed_from_pool = True
+                logger.info(f"Claimed pool container {container_id} for {username}")
+                break
+            else:
+                logger.warning(f"Failed to claim session {pool_session_id}, trying next")
+        else:
+            logger.warning(f"Failed to claim container {pool_container_id}, trying next")
+
+    # If no pool container available, create a new one
+    if not container_id:
+        session_id = str(uuid.uuid4())[:SESSION_ID_LENGTH]
+        vnc_password = generate_vnc_password()
+        container_id, container_ip = spawn_vnc_container(session_id, username, vnc_password)
+        logger.info(f"Created new container {container_id} for {username} (no pool available)")
+
+    # Wait for VNC to be ready (pool containers should already be ready)
     if not wait_for_vnc(container_ip, port=VNC_PORT, timeout=VNC_CONTAINER_TIMEOUT):
         destroy_container(container_id)
         raise RuntimeError(f"VNC server timeout for {username}")
@@ -75,6 +110,9 @@ def provision_user_connection(username: str) -> str:
     if force_home:
         guac_api.create_home_connection(username)
 
+    # Update session with guac connection ID
+    # For pool sessions, this updates the existing session
+    # For new sessions, this creates a new session
     SessionStore.save_session(session_id, {
         "session_id": session_id,
         "username": username,
@@ -82,7 +120,7 @@ def provision_user_connection(username: str) -> str:
         "vnc_password": vnc_password,
         "container_id": container_id,
         "container_ip": container_ip,
-        "created_at": time.time(),
+        "created_at": time.time() if not claimed_from_pool else None,  # Keep original for claimed
         "started_at": time.time()
     })
 

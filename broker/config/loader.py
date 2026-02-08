@@ -35,6 +35,38 @@ class BrokerConfig:
         # Default configuration
         defaults = {
             "sync": {"interval": 60, "ignored_users": ["guacadmin"], "sync_config_on_restart": False},
+            "orchestrator": {
+                "backend": "docker",
+                "docker": {
+                    "network": "guacamole_vnc-network"
+                },
+                "kubernetes": {
+                    "namespace": "guacamole",
+                    "service_account": "",
+                    "labels": {
+                        "app": "vnc-session",
+                        "managed-by": "guacamole-broker"
+                    },
+                    "image_pull_policy": "IfNotPresent",
+                    "image_pull_secrets": [],
+                    "node_selector": {},
+                    "tolerations": [],
+                    "resources": {
+                        "requests": {
+                            "memory": "512Mi",
+                            "cpu": "250m"
+                        },
+                        "limits": {
+                            "memory": "2Gi",
+                            "cpu": "1000m"
+                        }
+                    },
+                    "security_context": {
+                        "run_as_non_root": False,
+                        "run_as_user": 1000
+                    }
+                }
+            },
             "containers": {
                 "image": "ghcr.io/maximewewer/docker-browser-vnc:latest",
                 "connection_name": "Virtual Desktop",

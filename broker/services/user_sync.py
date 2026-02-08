@@ -5,18 +5,19 @@ User synchronization service for Guacamole users.
 import logging
 import threading
 import time
+import uuid
 
 from broker.config.settings import VNC_PORT, VNC_CONTAINER_TIMEOUT
 from broker.config.loader import BrokerConfig
 from broker.domain.session import SessionStore
 from broker.domain.guacamole import guac_api
 from broker.domain.container import (
-    docker_client,
     spawn_vnc_container,
     destroy_container,
     wait_for_vnc,
     generate_vnc_password,
 )
+from broker.domain.orchestrator import get_orchestrator
 from broker.services.provisioning import provision_user_connection
 
 logger = logging.getLogger("session-broker")
@@ -64,12 +65,9 @@ class UserSyncService:
             time.sleep(self.interval)
 
     def get_running_container_count(self) -> int:
-        """Get count of running VNC containers."""
+        """Get count of running VNC containers/pods."""
         try:
-            containers = docker_client.containers.list(
-                filters={"label": "guac.managed=true", "status": "running"}
-            )
-            return len(containers)
+            return get_orchestrator().get_running_count()
         except Exception:
             return 0
 
@@ -98,21 +96,9 @@ class UserSyncService:
         return 999.0  # Assume plenty if can't check
 
     def get_containers_memory_gb(self) -> float:
-        """Get total memory used by VNC containers in GB."""
+        """Get total memory used by VNC containers/pods in GB."""
         try:
-            containers = docker_client.containers.list(
-                filters={"label": "guac.managed=true", "status": "running"}
-            )
-            total_bytes = 0
-            for container in containers:
-                try:
-                    stats = container.stats(stream=False)
-                    mem_usage = stats.get("memory_stats", {}).get("usage", 0)
-                    total_bytes += mem_usage
-                except Exception:
-                    # Estimate 1GB per container if stats fail
-                    total_bytes += 1024 * 1024 * 1024
-            return total_bytes / 1024 / 1024 / 1024
+            return get_orchestrator().get_containers_memory_gb()
         except Exception:
             return 0.0
 
@@ -157,7 +143,8 @@ class UserSyncService:
 
     def prewarm_containers(self) -> None:
         """
-        Pre-warm containers for users who have sessions but no running container.
+        Maintain the container pool at the target size.
+        Creates new pool containers when the pool shrinks below init_containers.
         Respects limits from broker.yml: max containers, batch size, and memory.
         """
         # Import here to avoid circular imports
@@ -171,11 +158,31 @@ class UserSyncService:
 
             max_containers = pool_config.get("max_containers", 10)
             batch_size = pool_config.get("batch_size", 3)
+            target_pool_size = pool_config.get("init_containers", 2)
 
             # Check current container count
             current_count = self.get_running_container_count()
             if current_count >= max_containers:
                 logger.debug(f"Pre-warm skipped: at max capacity ({current_count}/{max_containers})")
+                return
+
+            # Check how many pool containers we have
+            pool_sessions = SessionStore.get_pool_sessions()
+            current_pool_size = len(pool_sessions)
+
+            # Calculate how many new pool containers we need
+            needed = target_pool_size - current_pool_size
+            if needed <= 0:
+                return
+
+            # Limit to batch size and respect max containers
+            slots_available = min(
+                batch_size,
+                max_containers - current_count,
+                needed
+            )
+
+            if slots_available <= 0:
                 return
 
             # Check if we can start a container (memory limits)
@@ -192,23 +199,8 @@ class UserSyncService:
                     logger.warning(f"Pre-warm skipped: {reason}")
                     return
 
-            sessions = SessionStore.get_sessions_needing_containers()
-            if not sessions:
-                return
-
-            # Limit to batch size and respect max containers
-            slots_available = min(
-                batch_size,
-                max_containers - current_count,
-                len(sessions)
-            )
-
             started = 0
-            for session in sessions[:slots_available]:
-                username = session.get("username")
-                if not username:
-                    continue
-
+            for _ in range(slots_available):
                 # Re-check resources before each container
                 can_start, reason = self.can_start_container()
                 if not can_start:
@@ -224,47 +216,44 @@ class UserSyncService:
                         break
 
                 try:
-                    vnc_password = session.get("vnc_password") or generate_vnc_password()
-                    session_id = session.get("session_id")
+                    session_id = str(uuid.uuid4())[:8]
+                    vnc_password = generate_vnc_password()
 
+                    # Spawn pool container without username
                     container_id, container_ip = spawn_vnc_container(
-                        session_id, username, vnc_password
+                        session_id, None, vnc_password
                     )
 
                     if wait_for_vnc(container_ip, port=VNC_PORT, timeout=VNC_CONTAINER_TIMEOUT):
-                        session.update({
+                        # Save pool session (no username, no guac connection yet)
+                        SessionStore.save_session(session_id, {
+                            "session_id": session_id,
+                            "username": None,
+                            "guac_connection_id": None,
+                            "vnc_password": vnc_password,
                             "container_id": container_id,
                             "container_ip": container_ip,
-                            "vnc_password": vnc_password,
+                            "created_at": time.time(),
                             "started_at": time.time()
                         })
-                        SessionStore.save_session(session_id, session)
-
-                        if session.get("guac_connection_id"):
-                            guac_api.update_connection(
-                                session["guac_connection_id"],
-                                container_ip,
-                                VNC_PORT,
-                                vnc_password
-                            )
 
                         started += 1
-                        logger.info(f"Pre-warmed container for {username} ({started}/{slots_available})")
+                        logger.info(f"Pool replenished: container {container_id} ready ({started}/{slots_available})")
                     else:
                         destroy_container(container_id)
-                        logger.warning(f"Pre-warm timeout for {username}")
+                        logger.warning(f"Pre-warm timeout for pool container")
                 except Exception as e:
-                    logger.warning(f"Pre-warm error for {username}: {e}")
+                    logger.warning(f"Pre-warm error: {e}")
 
             if started > 0:
-                logger.info(f"Pre-warm cycle: {started} containers started, {self.get_running_container_count()} total")
+                logger.info(f"Pre-warm cycle: {started} pool containers added, {self.get_running_container_count()} total")
         except Exception as e:
             logger.error(f"Pre-warm scan error: {e}")
 
     def init_pool(self) -> None:
         """
         Initialize the container pool at startup.
-        Starts pool.init_containers containers for existing sessions without containers.
+        Creates pool.init_containers generic containers ready to be claimed.
         """
         pool_config = BrokerConfig.get("pool", default={})
         if not pool_config.get("enabled", True):
@@ -275,58 +264,53 @@ class UserSyncService:
         if init_count <= 0:
             return
 
-        logger.info(f"Initializing container pool with {init_count} containers...")
+        # Check how many pool containers already exist
+        existing_pool = SessionStore.get_pool_sessions()
+        needed = init_count - len(existing_pool)
 
-        # Get sessions that need containers
-        sessions = SessionStore.get_sessions_needing_containers()
-        if not sessions:
-            logger.info("No sessions need containers at startup")
+        if needed <= 0:
+            logger.info(f"Pool already has {len(existing_pool)} containers, no init needed")
             return
 
+        logger.info(f"Initializing container pool with {needed} containers...")
+
         started = 0
-        for session in sessions[:init_count]:
+        for _ in range(needed):
             # Check resources before each container
             can_start, reason = self.can_start_container()
             if not can_start:
                 logger.warning(f"Pool init stopped: {reason}")
                 break
 
-            username = session.get("username")
-            if not username:
-                continue
-
             try:
-                vnc_password = session.get("vnc_password") or generate_vnc_password()
-                session_id = session.get("session_id")
+                session_id = str(uuid.uuid4())[:8]
+                vnc_password = generate_vnc_password()
 
+                # Spawn pool container without username
                 container_id, container_ip = spawn_vnc_container(
-                    session_id, username, vnc_password
+                    session_id, None, vnc_password
                 )
 
                 if wait_for_vnc(container_ip, port=VNC_PORT, timeout=VNC_CONTAINER_TIMEOUT):
-                    session.update({
+                    # Save pool session (no username, no guac connection yet)
+                    SessionStore.save_session(session_id, {
+                        "session_id": session_id,
+                        "username": None,
+                        "guac_connection_id": None,
+                        "vnc_password": vnc_password,
                         "container_id": container_id,
                         "container_ip": container_ip,
-                        "vnc_password": vnc_password,
+                        "created_at": time.time(),
                         "started_at": time.time()
                     })
-                    SessionStore.save_session(session_id, session)
-
-                    if session.get("guac_connection_id"):
-                        guac_api.update_connection(
-                            session["guac_connection_id"],
-                            container_ip,
-                            VNC_PORT,
-                            vnc_password
-                        )
 
                     started += 1
-                    logger.info(f"Pool init: container ready for {username} ({started}/{init_count})")
+                    logger.info(f"Pool init: container {container_id} ready ({started}/{needed})")
                 else:
                     destroy_container(container_id)
-                    logger.warning(f"Pool init timeout for {username}")
+                    logger.warning(f"Pool init timeout for container {container_id}")
             except Exception as e:
-                logger.warning(f"Pool init error for {username}: {e}")
+                logger.warning(f"Pool init error: {e}")
 
         logger.info(f"Pool initialization complete: {started} containers started")
 

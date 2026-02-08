@@ -37,205 +37,169 @@ When a user logs in, the broker automatically provisions a dedicated VNC contain
 ## Architecture
 
 ```
-                    +------------------+
-                    |      nginx       |  :443 (HTTPS)
-                    | (reverse proxy)  |
-                    +--------+---------+
-                             |
-          +------------------+------------------+
-          |                                     |
-          v                                     v
-+-------------------+               +---------------------+
-|    Guacamole      |               |   Session Broker    |
-|   (Web Client)    |               |   (Flask API)       |
-+--------+----------+               +----------+----------+
-         |                                     |
-         v                                     v
-+-------------------+               +---------------------+
-|      guacd        |<------------->|   Docker Daemon     |
-| (Protocol Server) |               +----------+----------+
-+--------+----------+                          |
-         |                          +----------+----------+
-         |                          |    VNC Containers   |
-         +------------------------->| (Firefox/Chromium)  |
-                                    +---------------------+
-
-         +-------------------+
-         |    PostgreSQL     |  (Sessions, Users, Config)
-         +-------------------+
+┌────────────────────────────────────────────────────────────────┐
+│                    STEP 1: guacamole-helm                      │
+│  (from https://github.com/MaximeWewer/guacamole-helm)          │
+├────────────────────────────────────────────────────────────────┤
+│  - Guacamole Client (webapp)                                   │
+│  - Guacd (protocol server)                                     │
+│  - PostgreSQL (database)                                       │
+│  - Ingress (optional)                                          │
+└────────────────────────────────────────────────────────────────┘
+                              ↓
+┌────────────────────────────────────────────────────────────────┐
+│                    STEP 2: guacamole-broker                    │
+│  (this chart - standalone deployment)                          │
+├────────────────────────────────────────────────────────────────┤
+│  - Session Broker (Flask API)                                  │
+│  - RBAC for VNC pod management                                 │
+│  - ConfigMap (broker.yml, profiles.yml)                        │
+│  - Secret (Guacamole credentials)                              │
+└────────────────────────────────────────────────────────────────┘
+                              ↓
+┌────────────────────────────────────────────────────────────────┐
+│                    VNC Pods (spawned by broker)                │
+├────────────────────────────────────────────────────────────────┤
+│  - Per-user browser containers                                 │
+│  - Firefox ESR or Chromium                                     │
+│  - Managed bookmarks and policies                              │
+└────────────────────────────────────────────────────────────────┘
 ```
 
 ### Components
 
 | Service            | Description                                     |
 | ------------------ | ----------------------------------------------- |
-| **nginx**          | TLS termination, WebSocket proxy, rate limiting |
 | **guacamole**      | Apache Guacamole web application                |
 | **guacd**          | Guacamole protocol server (VNC gateway)         |
 | **session-broker** | Python service managing container lifecycle     |
 | **postgres**       | Database for Guacamole and broker state         |
-| **VNC containers** | Per-user browser instances for webapp access    |
+| **VNC pods**       | Per-user browser instances for webapp access    |
 
 ## Requirements
 
-- Docker Engine 24.0+
-- Docker Compose v2
+- Kubernetes 1.25+
+- Helm 3.x
+- [guacamole-helm](https://github.com/MaximeWewer/guacamole-helm) deployed
 - 4GB RAM minimum (8GB+ recommended for multiple users)
-- `yq` for YAML processing ([installation](https://github.com/mikefarah/yq#install))
 
 ## Quick start
 
-### 1. Clone and configure
+### 1. Deploy Guacamole first
 
 ```bash
-git clone https://github.com/MaximeWewer/guacamole-session-broker.git
-cd guacamole-session-broker
+# Add the Guacamole Helm repository
+helm repo add guacamole https://maximewewer.github.io/guacamole-helm
+helm repo update
 
-# Run interactive setup
-./setup.sh
+# Install Guacamole
+helm install guacamole guacamole/guacamole \
+  --namespace guacamole \
+  --create-namespace \
+  --set postgresql.enabled=true
 ```
 
-The setup script will:
-
-- Prompt for database and admin passwords
-- Configure SSL (self-signed or Let's Encrypt)
-- Set URL routing mode (path, root, or subdomain)
-- Generate `docker-compose.yml` and nginx configs
-- Initialize PostgreSQL schema
-
-### 2. Start services
+### 2. Get PostgreSQL password
 
 ```bash
-docker compose up -d
+PGPASSWORD=$(kubectl get secret guacamole-postgresql -n guacamole \
+  -o jsonpath='{.data.password}' | base64 -d)
 ```
 
-### 3. Get Let's Encrypt certificate (if configured)
+### 3. Deploy the Session Broker
 
 ```bash
-./init-letsencrypt.sh
+# Clone this repository
+git clone https://github.com/MaximeWewer/guacamole-webapp-gateway.git
+cd guacamole-webapp-gateway
+
+# Install the broker
+helm install broker ./chart \
+  --namespace guacamole \
+  --set guacamole.url=http://guacamole:8080/guacamole \
+  --set guacamole.adminPassword=guacadmin \
+  --set database.host=guacamole-postgresql \
+  --set database.password=$PGPASSWORD
 ```
 
-### 4. Access Guacamole
+### 4. Verify deployment
 
-- **Path mode**: `https://your-domain/guacamole/`
-- **Root mode**: `https://your-domain/`
-- **Subdomain mode**: `https://guacamole.your-domain/`
+```bash
+# Check pods
+kubectl get pods -n guacamole -l app.kubernetes.io/name=guacamole-broker
 
-Default credentials: `guacadmin` / (password set during setup)
+# Check logs
+kubectl logs -n guacamole -l app.kubernetes.io/name=guacamole-broker
+
+# Test health endpoint
+kubectl port-forward -n guacamole svc/broker-guacamole-broker 5000:5000
+curl http://localhost:5000/health
+```
 
 ## Configuration
 
-Configuration is split into three files in the `config/` directory:
+### Helm values
 
-### setup.yml - Infrastructure
-
-Deployment settings used by `setup.sh` to generate Docker Compose:
+The broker is configured via `values.yaml`. Key sections:
 
 ```yaml
+# Connection to existing Guacamole deployment
+guacamole:
+  url: "http://guacamole:8080/guacamole"
+  adminUser: guacadmin
+  adminPassword: ""
+  existingSecret: ""  # Use existing secret instead
+
+# Connection to PostgreSQL
 database:
-  host: postgres
+  host: "guacamole-postgresql"
   port: 5432
-  name: guacamole
-  user: guacamole
-  password: ""  # Set during setup
+  name: "guacamole"
+  user: "guacamole"
+  password: ""
+  existingSecret: ""  # Use existing secret instead
 
-guacamole:
-  admin_user: guacadmin
-  admin_password: ""  # Set during setup
-
-versions:
-  guacamole: "1.6.0"
-  guacd: "1.6.0"
-  postgres: "15-alpine"
-  nginx: "1.27-alpine"
-
-ssl:
-  mode: selfsigned  # or "letsencrypt"
-  profile: modern   # or "intermediate" for TLSv1.2
-  domain: ""
-  email: ""
-
-nginx:
-  url_mode: path    # path, root, or subdomain
-  base_path: "/guacamole/"
-
-vault:
-  enabled: false
-  address: ""
-  token: ""
-```
-
-### broker.yml - Runtime behavior
-
-Container and lifecycle settings (hot-reloaded every 60 seconds):
-
-```yaml
-sync:
-  interval: 10              # User sync frequency (seconds)
-  ignored_users:
-    - guacadmin
-  sync_config_on_restart: true  # Update existing connections on restart
-
-containers:
-  image: ghcr.io/maximewewer/docker-browser-vnc:2026.01.2-chromium
-  connection_name: "Virtual Desktop"
-  network: guacamole_vnc-network
-  memory_limit: "1g"
-  shm_size: "256m"
-  vnc_timeout: 30
-
-lifecycle:
-  persist_after_disconnect: true
-  idle_timeout_minutes: 3
-  force_kill_on_low_resources: true
-
-pool:
-  enabled: true
-  init_containers: 2
-  max_containers: 10
-  batch_size: 3
+# VNC container configuration
+vnc:
+  image:
+    repository: ghcr.io/maximewewer/docker-browser-vnc
+    tag: 2026.01.2-chromium
   resources:
-    min_free_memory_gb: 2.0
-    max_total_memory_gb: 16.0
-    max_memory_percent: 0.75
+    requests: { memory: "512Mi", cpu: "250m" }
+    limits: { memory: "2Gi", cpu: "1000m" }
 
-guacamole:
-  force_home_page: true
-  home_connection_name: "Home"
-  recording:
-    enabled: true
-    path: "${HISTORY_PATH}/${HISTORY_UUID}"
-    name: ""
-    include_keys: false
-    auto_create_path: true
+# User profiles (bookmarks, homepage, autofill)
+profiles:
+  default:
+    description: "Default profile"
+    priority: 0
+    homepage: "https://www.google.com"
+    bookmarks:
+      - name: "Google"
+        url: "https://www.google.com"
 ```
 
-### profiles.yml - User profiles
+See `chart/values.yaml` for the complete list of options.
 
-Group-based browser configurations:
+### User profiles
+
+Profiles define browser configuration per Guacamole user group:
 
 ```yaml
-default:
-  description: "Default profile"
-  priority: 0
-  homepage: "https://www.google.com"
-  bookmarks:
-    - name: "Google"
-      url: "https://www.google.com"
-
-developers:
-  description: "Development team"
-  priority: 10
-  homepage: "https://github.com"
-  bookmarks:
-    - name: "GitHub"
-      url: "https://github.com"
-    - name: "Stack Overflow"
-      url: "https://stackoverflow.com"
-  autofill:
-    - url: "https://github.com/login"
-      username: "${GUAC_USERNAME}"
-      password: "${vault:github_password}"
+profiles:
+  developers:
+    description: "Development team"
+    priority: 10
+    homepage: "https://github.com"
+    bookmarks:
+      - name: "GitHub"
+        url: "https://github.com"
+      - name: "Stack Overflow"
+        url: "https://stackoverflow.com"
+    autofill:
+      - url: "https://github.com/login"
+        username: "${GUAC_USERNAME}"
+        password: "${vault:github_password}"
 ```
 
 **Variable expansion:**
@@ -244,15 +208,38 @@ developers:
 - `${vault:key}` - Secret from Vault/OpenBao
 - `${env:VAR}` - Environment variable
 
+### Vault integration
+
+For secure credential management:
+
+```yaml
+vault:
+  enabled: true
+  address: "https://vault.example.com:8200"
+  roleId: ""      # AppRole auth (recommended)
+  secretId: ""
+  # Or use token auth
+  token: ""
+  mount: "secret"
+  path: "guacamole/broker"
+```
+
+Store secrets in Vault:
+
+```bash
+vault kv put secret/guacamole/broker \
+  github_password="xxx" \
+  intranet_password="yyy"
+```
+
 ## VNC container images
 
-This project uses [docker-browser-vnc](https://github.com/MaximeWewer/docker-browser-vnc), purpose-built containers for webapp access:
+This project uses [docker-browser-vnc](https://github.com/MaximeWewer/docker-browser-vnc):
 
 - **Minimal footprint** - Debian with Openbox, just enough for a browser
 - **Firefox ESR or Chromium** - Enterprise-ready browsers
 - **VNC server** - TigerVNC with clipboard support
 - **Managed policies** - Pre-configured bookmarks, homepage, restrictions
-- **Persistent profiles** - User data survives container restarts
 
 Available images:
 
@@ -260,8 +247,6 @@ Available images:
 ghcr.io/maximewewer/docker-browser-vnc:2026.01.2-firefox
 ghcr.io/maximewewer/docker-browser-vnc:2026.01.2-chromium
 ```
-
-The broker automatically detects the browser type from the image name and applies the appropriate policy format.
 
 ## Container lifecycle
 
@@ -272,62 +257,41 @@ The broker automatically detects the browser type from the image name and applie
 2. Broker detects new user (sync every 10s)
            |
            v
-3. VNC container spawned from pool or created
+3. VNC pod spawned from pool or created
            |
            v
 4. Browser policies applied (bookmarks, homepage)
            |
            v
-5. Guacamole connection updated with container IP
+5. Guacamole connection updated with pod IP
            |
            v
 6. User connects to their virtual desktop
            |
            v
 7. On disconnect:
-   - persist=true:  Container kept running (idle timeout)
-   - persist=false: Container destroyed immediately
+   - persist=true:  Pod kept running (idle timeout)
+   - persist=false: Pod destroyed immediately
            |
            v
-8. Idle timeout reached: Container destroyed
+8. Idle timeout reached: Pod destroyed
 ```
 
 ### Pre-warming pool
 
-The broker maintains a pool of ready containers to reduce connection latency:
+The broker maintains a pool of ready containers:
 
 ```yaml
 pool:
   enabled: true
-  init_containers: 2    # Start 2 containers at broker startup
-  max_containers: 10    # Maximum total containers
-  batch_size: 3         # Create up to 3 per sync cycle
+  initContainers: 2     # Start 2 pods at broker startup
+  maxContainers: 10     # Maximum total pods
+  batchSize: 3          # Create up to 3 per sync cycle
 ```
-
-Resource limits prevent runaway container creation:
-
-- `min_free_memory_gb`: Stop if free RAM below threshold
-- `max_total_memory_gb`: Stop if total VNC memory exceeds limit
-- `max_memory_percent`: Stop if VNC containers use > X% of RAM
-
-## Session recording
-
-Enable VNC session recording for audit/playback:
-
-```yaml
-guacamole:
-  recording:
-    enabled: true
-    path: "${HISTORY_PATH}/${HISTORY_UUID}"  # Guacamole 1.5+ integration
-    include_keys: false                       # Keyboard capture (privacy concern)
-    auto_create_path: true
-```
-
-Recordings appear in Guacamole's connection history with playback controls.
 
 ## API reference
 
-The broker exposes a REST API on port 5000 (internal) and `/broker/` (via nginx).
+The broker exposes a REST API on port 5000.
 
 ### Health & status
 
@@ -351,8 +315,6 @@ The broker exposes a REST API on port 5000 (internal) and `/broker/` (via nginx)
 | `/api/users/<username>/provision`      | POST   | Provision VNC connection   |
 | `/api/users/<username>/groups`         | GET    | Get user's groups & config |
 | `/api/users/<username>/refresh-config` | POST   | Reload group configuration |
-| `/api/users/<username>/bookmarks`      | POST   | Add bookmark for user      |
-| `/api/users/<username>/profile`        | GET    | Get profile info           |
 
 ### Sync
 
@@ -361,123 +323,40 @@ The broker exposes a REST API on port 5000 (internal) and `/broker/` (via nginx)
 | `/api/sync` | GET    | Sync service status      |
 | `/api/sync` | POST   | Trigger manual user sync |
 
-### Groups (database-stored)
-
-| Endpoint             | Method | Description         |
-| -------------------- | ------ | ------------------- |
-| `/api/groups`        | GET    | List all groups     |
-| `/api/groups/<name>` | GET    | Get group config    |
-| `/api/groups/<name>` | PUT    | Create/update group |
-| `/api/groups/<name>` | DELETE | Delete group        |
-
-### Guacamole integration
-
-| Endpoint                | Method | Description                |
-| ----------------------- | ------ | -------------------------- |
-| `/api/guacamole/groups` | GET    | List Guacamole user groups |
-
-## Vault integration
-
-For secure credential management, configure HashiCorp Vault or OpenBao:
-
-```yaml
-# config/setup.yml
-vault:
-  enabled: true
-  address: "https://vault.example.com:8200"
-  token: "hvs.xxx"  # Or use AppRole
-  role_id: ""
-  secret_id: ""
-  mount: "secret"
-  path: "guacamole/broker"
-```
-
-Store secrets:
-
-```bash
-vault kv put secret/guacamole/broker \
-  github_password="xxx" \
-  intranet_password="yyy"
-```
-
-Reference in profiles:
-
-```yaml
-autofill:
-  - url: "https://github.com/login"
-    password: "${vault:github_password}"
-```
-
-## SSL configuration
-
-### Self-signed (development)
-
-Generated automatically during setup. Browser will show security warning.
-
-### Let's Encrypt (production)
-
-```yaml
-ssl:
-  mode: letsencrypt
-  profile: modern     # TLSv1.3 only
-  domain: example.com
-  email: admin@example.com
-```
-
-After `docker compose up -d`, run:
-
-```bash
-./init-letsencrypt.sh
-```
-
-Certificate auto-renews every 12 hours via certbot container.
-
-### Security headers
-
-nginx includes security headers:
-
-- HSTS (2 years, preload)
-- X-Frame-Options: SAMEORIGIN
-- X-Content-Type-Options: nosniff
-- CSP, Referrer-Policy, Permissions-Policy
-
 ## Troubleshooting
 
-### Container won't start
+### Pod won't start
 
-Check resource limits:
+Check resource limits and RBAC:
 
 ```bash
-docker exec session-broker curl -s http://localhost:5000/api/sync
+# Check broker logs
+kubectl logs -n guacamole -l app.kubernetes.io/name=guacamole-broker
+
+# Check if service account has permissions
+kubectl auth can-i create pods --as=system:serviceaccount:guacamole:broker-guacamole-broker -n guacamole
 ```
 
 ### VNC connection timeout
 
-Increase timeout:
+Increase timeout in values:
 
 ```yaml
-containers:
-  vnc_timeout: 60
-```
-
-### Recording playback not working
-
-Ensure guacd has write permissions:
-
-```bash
-docker exec guacd ls -la /recordings
+vnc:
+  timeout: 60
 ```
 
 ### View broker logs
 
 ```bash
-docker logs -f session-broker
+kubectl logs -n guacamole -l app.kubernetes.io/name=guacamole-broker -f
 ```
 
 ### Force user sync
 
 ```bash
-curl -X POST http://localhost/broker/sync
+kubectl exec -n guacamole deploy/broker-guacamole-broker -- \
+  curl -X POST http://localhost:5000/api/sync
 ```
 
 ## Project structure
@@ -490,20 +369,26 @@ curl -X POST http://localhost/broker/sync
 │   ├── domain/                # Core business logic
 │   ├── persistence/           # Database layer
 │   └── services/              # Background services
-├── config/                    # Configuration files
-│   ├── setup.yml              # Infrastructure config
-│   ├── broker.yml             # Runtime behavior
-│   └── profiles.yml           # User profiles
-├── nginx/                     # nginx configuration (generated)
-├── initdb/                    # PostgreSQL init scripts (generated)
-├── setup.sh                   # Interactive setup script
-└── docker-compose.yml         # Docker Compose (generated)
+├── chart/                     # Helm chart
+│   ├── Chart.yaml
+│   ├── values.yaml
+│   └── templates/
+│       ├── _helpers.tpl
+│       ├── deployment.yaml
+│       ├── service.yaml
+│       ├── configmap.yaml
+│       ├── secret.yaml
+│       └── rbac.yaml
+└── config/                    # Example configuration files
+    ├── broker.yml             # Broker settings reference
+    └── profiles.yml           # User profiles reference
 ```
 
 ## Related projects
 
-- [docker-browser-vnc](https://github.com/MaximeWewer/docker-browser-vnc) - Lightweight browser containers with VNC (Firefox/Chromium)
-- [Apache Guacamole](https://guacamole.apache.org/) - Clientless remote desktop gateway (RDP, VNC, SSH)
+- [docker-browser-vnc](https://github.com/MaximeWewer/docker-browser-vnc) - Lightweight browser containers with VNC
+- [guacamole-helm](https://github.com/MaximeWewer/guacamole-helm) - Helm chart for Apache Guacamole
+- [Apache Guacamole](https://guacamole.apache.org/) - Clientless remote desktop gateway
 
 ## Contributing
 
@@ -512,4 +397,4 @@ curl -X POST http://localhost/broker/sync
 3. Make your changes
 4. Submit a pull request
 
-For issues and feature requests, use [GitHub Issues](https://github.com/MaximeWewer/guacamole-session-broker/issues).
+For issues and feature requests, use [GitHub Issues](https://github.com/MaximeWewer/guacamole-webapp-gateway/issues).

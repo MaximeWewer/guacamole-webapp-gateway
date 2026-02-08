@@ -5,6 +5,9 @@ gunicorn
 # Docker SDK
 docker
 
+# Kubernetes SDK (optional, only needed for Kubernetes backend)
+kubernetes
+
 # HTTP client
 requests
 

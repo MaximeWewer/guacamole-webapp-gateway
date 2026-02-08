@@ -1,0 +1,161 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "guacamole-broker.fullname" . }}
+  labels:
+    {{- include "guacamole-broker.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "guacamole-broker.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "guacamole-broker.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "guacamole-broker.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 5000
+              protocol: TCP
+          env:
+            # Guacamole API connection
+            - name: GUACAMOLE_URL
+              value: {{ .Values.guacamole.url | quote }}
+            - name: GUACAMOLE_ADMIN_USER
+              value: {{ .Values.guacamole.adminUser | quote }}
+            - name: GUACAMOLE_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "guacamole-broker.guacamoleSecretName" . }}
+                  key: {{ .Values.guacamole.existingSecretKey | default "password" }}
+            # Database connection
+            - name: DATABASE_HOST
+              value: {{ .Values.database.host | quote }}
+            - name: DATABASE_PORT
+              value: {{ .Values.database.port | quote }}
+            - name: DATABASE_NAME
+              value: {{ .Values.database.name | quote }}
+            - name: DATABASE_USER
+              value: {{ .Values.database.user | quote }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "guacamole-broker.databaseSecretName" . }}
+                  key: {{ .Values.database.existingSecretKey | default "password" }}
+            # Orchestrator settings
+            - name: ORCHESTRATOR_BACKEND
+              value: "kubernetes"
+            - name: KUBERNETES_NAMESPACE
+              value: {{ include "guacamole-broker.vncNamespace" . | quote }}
+            - name: KUBERNETES_SERVICE_ACCOUNT
+              value: {{ include "guacamole-broker.serviceAccountName" . | quote }}
+            {{- if .Values.vault.enabled }}
+            # Vault settings
+            - name: VAULT_ADDR
+              value: {{ .Values.vault.address | quote }}
+            {{- if and (not .Values.vault.existingSecret) .Values.vault.token }}
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "guacamole-broker.vaultSecretName" . }}
+                  key: token
+            {{- end }}
+            {{- if and (not .Values.vault.existingSecret) .Values.vault.roleId }}
+            - name: VAULT_ROLE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "guacamole-broker.vaultSecretName" . }}
+                  key: role-id
+            - name: VAULT_SECRET_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "guacamole-broker.vaultSecretName" . }}
+                  key: secret-id
+            {{- end }}
+            {{- if .Values.vault.existingSecret }}
+            {{- if .Values.vault.token }}
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.vault.existingSecret }}
+                  key: token
+            {{- else }}
+            - name: VAULT_ROLE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.vault.existingSecret }}
+                  key: role-id
+            - name: VAULT_SECRET_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.vault.existingSecret }}
+                  key: secret-id
+            {{- end }}
+            {{- end }}
+            - name: VAULT_MOUNT
+              value: {{ .Values.vault.mount | quote }}
+            - name: VAULT_PATH
+              value: {{ .Values.vault.path | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /data/config
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "guacamole-broker.fullname" . }}-config
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -78,7 +78,7 @@ app.register_blueprint(api)
 # Import services (must be after database init)
 from broker.services.user_sync import user_sync
 from broker.services.connection_monitor import monitor
-from broker.domain.container import docker_client
+from broker.domain.orchestrator import get_orchestrator
 from broker.config.loader import BrokerConfig
 from broker.domain.session import SessionStore
 from broker.domain.guacamole import guac_api
@@ -88,13 +88,13 @@ from broker.domain.guacamole import guac_api
 # =============================================================================
 
 def cleanup_orphaned_containers() -> None:
-    """Clean up orphaned VNC containers from previous runs."""
+    """Clean up orphaned VNC containers/pods from previous runs."""
     try:
-        for container in docker_client.containers.list(all=True, filters={"label": "guac.managed=true"}):
-            logger.info(f"Cleaning up orphaned container: {container.name}")
+        orchestrator = get_orchestrator()
+        for container in orchestrator.list_managed_containers():
+            logger.info(f"Cleaning up orphaned container: {container['name']}")
             try:
-                container.stop(timeout=2)
-                container.remove()
+                orchestrator.destroy_container(container["id"])
             except Exception:
                 pass
     except Exception as e:
