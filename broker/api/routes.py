@@ -53,7 +53,20 @@ DATABASE_NAME = get_env("database_name", "guacamole")
 @api.route("/health")
 @limiter.exempt
 def health() -> RouteResponse:
-    """Health check endpoint."""
+    """Health check endpoint.
+    ---
+    tags:
+      - Health
+    responses:
+      200:
+        description: All critical services are up.
+        schema:
+          $ref: '#/definitions/HealthResponse'
+      503:
+        description: One or more critical services are down.
+        schema:
+          $ref: '#/definitions/HealthResponse'
+    """
     from flask import jsonify
 
     # 1. Database
@@ -95,13 +108,45 @@ def health() -> RouteResponse:
 
 @api.route("/api/secrets/status")
 def secrets_status() -> RouteResponse:
-    """Get secrets provider status."""
+    """Get secrets provider status.
+    ---
+    tags:
+      - Config
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    responses:
+      200:
+        description: Secrets provider status.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     return api_success(secrets_provider.get_status())
 
 
 @api.route("/api/config")
 def get_config() -> RouteResponse:
-    """Get broker configuration (non-sensitive)."""
+    """Get broker configuration (non-sensitive).
+    ---
+    tags:
+      - Config
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    responses:
+      200:
+        description: Current broker configuration.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     settings = BrokerConfig.settings()
     return api_success({
         "vnc_image": settings.containers.image,
@@ -122,7 +167,33 @@ def get_config() -> RouteResponse:
 
 @api.route("/api/sessions")
 def list_sessions() -> RouteResponse:
-    """List all sessions."""
+    """List all active sessions.
+    ---
+    tags:
+      - Sessions
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    responses:
+      200:
+        description: List of sessions (vnc_password excluded).
+        schema:
+          type: object
+          properties:
+            success:
+              type: boolean
+            data:
+              type: object
+              properties:
+                sessions:
+                  type: array
+                  items:
+                    $ref: '#/definitions/SessionItem'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     sessions = []
     for s in SessionStore.list_sessions():
         if s is None:
@@ -137,7 +208,37 @@ def list_sessions() -> RouteResponse:
 @api.route("/api/sessions/<session_id>", methods=["DELETE"])
 @limiter.limit(lambda: admin_limit)
 def force_cleanup(session_id: str) -> RouteResponse:
-    """Force cleanup a session."""
+    """Force cleanup a session.
+    ---
+    tags:
+      - Sessions
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    parameters:
+      - name: session_id
+        in: path
+        type: string
+        required: true
+        description: The session ID to clean up.
+    responses:
+      200:
+        description: Session cleaned up.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      404:
+        description: Session not found.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      429:
+        description: Rate limit exceeded.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     session = SessionStore.get_session(session_id)
     if not session:
         return api_error("Session not found", 404)
@@ -157,14 +258,50 @@ def force_cleanup(session_id: str) -> RouteResponse:
 
 @api.route("/api/sync", methods=["GET"])
 def get_sync_status() -> RouteResponse:
-    """Get sync service status."""
+    """Get sync service status.
+    ---
+    tags:
+      - Sync
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    responses:
+      200:
+        description: Current sync statistics.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     return api_success(get_services().user_sync.get_stats())
 
 
 @api.route("/api/sync", methods=["POST"])
 @limiter.limit(lambda: admin_limit)
 def trigger_sync() -> RouteResponse:
-    """Trigger manual user sync."""
+    """Trigger manual user sync.
+    ---
+    tags:
+      - Sync
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    responses:
+      200:
+        description: Sync completed successfully.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      429:
+        description: Rate limit exceeded.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     user_sync = get_services().user_sync
     new_users = user_sync.sync_users()
     return api_success({"new_users": new_users, "stats": user_sync.get_stats()})
@@ -177,7 +314,41 @@ def trigger_sync() -> RouteResponse:
 @api.route("/api/users/<username>/provision", methods=["POST"])
 @limiter.limit(lambda: admin_limit)
 def provision_user(username: str) -> RouteResponse:
-    """Provision a user connection."""
+    """Provision a user connection.
+    ---
+    tags:
+      - Users
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    parameters:
+      - name: username
+        in: path
+        type: string
+        required: true
+        description: The Guacamole username.
+    responses:
+      200:
+        description: Connection provisioned.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      400:
+        description: Invalid username.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      429:
+        description: Rate limit exceeded.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      500:
+        description: Provisioning failed.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     try:
         username = validate_username(username)
         conn_id = provision_user_connection(username)
@@ -192,7 +363,41 @@ def provision_user(username: str) -> RouteResponse:
 @api.route("/api/users/<username>/refresh-config", methods=["POST"])
 @limiter.limit(lambda: admin_limit)
 def refresh_user_config(username: str) -> RouteResponse:
-    """Refresh user configuration from groups."""
+    """Refresh user configuration from groups.
+    ---
+    tags:
+      - Users
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    parameters:
+      - name: username
+        in: path
+        type: string
+        required: true
+        description: The Guacamole username.
+    responses:
+      200:
+        description: Configuration refreshed.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      400:
+        description: Invalid username.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      429:
+        description: Rate limit exceeded.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      500:
+        description: Configuration refresh failed.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     try:
         username = validate_username(username)
         user_groups = get_services().guac_api.get_user_groups(username)
@@ -207,7 +412,37 @@ def refresh_user_config(username: str) -> RouteResponse:
 
 @api.route("/api/users/<username>/groups")
 def get_user_groups_api(username: str) -> RouteResponse:
-    """Get user's groups and effective configuration."""
+    """Get user's groups and effective configuration.
+    ---
+    tags:
+      - Users
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    parameters:
+      - name: username
+        in: path
+        type: string
+        required: true
+        description: The Guacamole username.
+    responses:
+      200:
+        description: User groups and effective config.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      400:
+        description: Invalid username.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      500:
+        description: Failed to get user groups.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     try:
         username = validate_username(username)
         user_groups = get_services().guac_api.get_user_groups(username)
@@ -227,7 +462,46 @@ def get_user_groups_api(username: str) -> RouteResponse:
 @api.route("/api/users/<username>/bookmarks", methods=["POST"])
 @limiter.limit(lambda: admin_limit)
 def add_user_bookmark(username: str) -> RouteResponse:
-    """Add a bookmark for user."""
+    """Add a bookmark for a user.
+    ---
+    tags:
+      - Users
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    parameters:
+      - name: username
+        in: path
+        type: string
+        required: true
+        description: The Guacamole username.
+      - name: body
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/BookmarkInput'
+    responses:
+      200:
+        description: Bookmark added.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      400:
+        description: Invalid input (missing name/url or invalid username).
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      429:
+        description: Rate limit exceeded.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      500:
+        description: Failed to add bookmark.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     try:
         username = validate_username(username)
         data = request.get_json() or {}
@@ -250,7 +524,41 @@ def add_user_bookmark(username: str) -> RouteResponse:
 
 @api.route("/api/users/<username>/profile")
 def get_user_profile(username: str) -> RouteResponse:
-    """Get user profile information."""
+    """Get user profile information.
+    ---
+    tags:
+      - Users
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    parameters:
+      - name: username
+        in: path
+        type: string
+        required: true
+        description: The Guacamole username.
+    responses:
+      200:
+        description: User profile data.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      400:
+        description: Invalid username.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      404:
+        description: Profile not found.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      500:
+        description: Failed to get profile.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     try:
         username = validate_username(username)
         user_path = UserProfile.get_user_path(username)
@@ -279,13 +587,59 @@ def get_user_profile(username: str) -> RouteResponse:
 
 @api.route("/api/groups")
 def list_groups() -> RouteResponse:
-    """List all groups."""
+    """List all group configurations.
+    ---
+    tags:
+      - Groups
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    responses:
+      200:
+        description: All group configurations.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     return api_success({"groups": group_config.get_all_groups()})
 
 
 @api.route("/api/groups/<group_name>")
 def get_group(group_name: str) -> RouteResponse:
-    """Get a specific group configuration."""
+    """Get a specific group configuration.
+    ---
+    tags:
+      - Groups
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    parameters:
+      - name: group_name
+        in: path
+        type: string
+        required: true
+        description: The group name.
+    responses:
+      200:
+        description: Group configuration.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      400:
+        description: Invalid group name.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      404:
+        description: Group not found.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     try:
         group_name = validate_group_name(group_name)
         cfg = group_config.get_group_config(group_name)
@@ -299,7 +653,46 @@ def get_group(group_name: str) -> RouteResponse:
 @api.route("/api/groups/<group_name>", methods=["PUT"])
 @limiter.limit(lambda: admin_limit)
 def update_group_api(group_name: str) -> RouteResponse:
-    """Create or update a group."""
+    """Create or update a group.
+    ---
+    tags:
+      - Groups
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    parameters:
+      - name: group_name
+        in: path
+        type: string
+        required: true
+        description: The group name.
+      - name: body
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/GroupPayload'
+    responses:
+      200:
+        description: Group created or updated.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      400:
+        description: Invalid group name or request body.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      429:
+        description: Rate limit exceeded.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      500:
+        description: Failed to save group.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     try:
         group_name = validate_group_name(group_name)
         data = request.get_json()
@@ -325,7 +718,41 @@ def update_group_api(group_name: str) -> RouteResponse:
 @api.route("/api/groups/<group_name>", methods=["DELETE"])
 @limiter.limit(lambda: admin_limit)
 def delete_group_api(group_name: str) -> RouteResponse:
-    """Delete a group."""
+    """Delete a group.
+    ---
+    tags:
+      - Groups
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    parameters:
+      - name: group_name
+        in: path
+        type: string
+        required: true
+        description: The group name.
+    responses:
+      200:
+        description: Group deleted.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      400:
+        description: Invalid group name or cannot delete default group.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      404:
+        description: Group not found.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      429:
+        description: Rate limit exceeded.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     try:
         group_name = validate_group_name(group_name)
         if group_name == "default":
@@ -344,7 +771,23 @@ def delete_group_api(group_name: str) -> RouteResponse:
 
 @api.route("/api/settings")
 def get_settings() -> RouteResponse:
-    """Get broker settings."""
+    """Get broker settings.
+    ---
+    tags:
+      - Settings
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    responses:
+      200:
+        description: Current broker settings.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     return api_success({
         "merge_bookmarks": group_config.get_setting("merge_bookmarks", "true") == "true",
         "inherit_from_default": group_config.get_setting("inherit_from_default", "true") == "true"
@@ -354,7 +797,33 @@ def get_settings() -> RouteResponse:
 @api.route("/api/settings", methods=["PUT"])
 @limiter.limit(lambda: admin_limit)
 def update_settings() -> RouteResponse:
-    """Update broker settings."""
+    """Update broker settings.
+    ---
+    tags:
+      - Settings
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/SettingsPayload'
+    responses:
+      200:
+        description: Settings updated.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      429:
+        description: Rate limit exceeded.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     data = request.get_json() or {}
     if "merge_bookmarks" in data:
         group_config.set_setting("merge_bookmarks", "true" if data["merge_bookmarks"] else "false")
@@ -369,7 +838,27 @@ def update_settings() -> RouteResponse:
 
 @api.route("/api/guacamole/groups")
 def list_guacamole_groups() -> RouteResponse:
-    """List Guacamole user groups."""
+    """List Guacamole user groups.
+    ---
+    tags:
+      - Guacamole
+    security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+    responses:
+      200:
+        description: Guacamole user groups.
+        schema:
+          $ref: '#/definitions/SuccessResponse'
+      401:
+        description: Missing or invalid API key.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+      500:
+        description: Failed to get Guacamole groups.
+        schema:
+          $ref: '#/definitions/ErrorResponse'
+    """
     try:
         return api_success({"groups": get_services().guac_api.get_all_user_groups()})
     except Exception as e:

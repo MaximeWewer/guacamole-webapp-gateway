@@ -64,6 +64,19 @@ class TestHealth:
         assert data["status"] == "degraded"
         assert data["services"]["monitor"] is False
 
+    def test_apidocs_accessible(self, app_client):
+        """GET /apidocs/ → 200 (Swagger UI)."""
+        resp = app_client.get("/apidocs/")
+        assert resp.status_code in (200, 301, 308)
+
+    def test_apispec_json(self, app_client):
+        """GET /apispec_1.json → 200, contains paths and info."""
+        resp = app_client.get("/apispec_1.json")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "paths" in data
+        assert "info" in data
+
 
 # ---------------------------------------------------------------------------
 # Authentication

@@ -1,6 +1,7 @@
 # Web framework
 flask
 gunicorn
+flasgger
 
 # Docker SDK
 docker

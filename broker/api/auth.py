@@ -20,7 +20,7 @@ from broker.config.settings import get_env
 logger = logging.getLogger("session-broker")
 
 # Endpoints that do not require authentication (use Flask endpoint names)
-PUBLIC_ENDPOINTS = frozenset({"api.health"})
+PUBLIC_ENDPOINTS: set[str] = {"api.health"}
 
 
 def _get_api_key() -> str | None:

@@ -65,6 +65,10 @@ init_limiter(app)
 from broker.observability import init_metrics
 init_metrics(app)
 
+# Initialize OpenAPI / Swagger documentation (serves /apidocs and /apispec_1.json)
+from broker.api.swagger import init_swagger
+init_swagger(app)
+
 # =============================================================================
 # Import and Initialize Modules
 # =============================================================================
