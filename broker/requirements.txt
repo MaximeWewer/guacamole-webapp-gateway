@@ -19,3 +19,8 @@ pyyaml
 
 # Rate limiting
 flask-limiter
+
+# Testing
+pytest
+pytest-mock
+pytest-cov
