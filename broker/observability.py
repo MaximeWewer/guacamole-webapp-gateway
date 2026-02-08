@@ -45,6 +45,16 @@ ERRORS_TOTAL = Counter(
     ["endpoint"],
 )
 
+DB_POOL_SIZE = Gauge(
+    "broker_db_pool_size",
+    "Total connections in the database pool",
+)
+
+DB_POOL_USED = Gauge(
+    "broker_db_pool_used",
+    "Connections currently checked out",
+)
+
 
 # =============================================================================
 # Metrics Initialization
@@ -112,5 +122,13 @@ def collect_business_metrics() -> None:
         orchestrator = get_orchestrator()
         ACTIVE_CONTAINERS.set(orchestrator.get_running_count())
         POOL_CONTAINERS.set(len(orchestrator.get_pool_containers()))
+    except Exception:
+        pass
+
+    try:
+        from broker.persistence.database import get_pool_stats
+        stats = get_pool_stats()
+        DB_POOL_SIZE.set(stats["pool_size"])
+        DB_POOL_USED.set(stats["pool_used"])
     except Exception:
         pass

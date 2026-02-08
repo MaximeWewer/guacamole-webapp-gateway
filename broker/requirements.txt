@@ -14,6 +14,9 @@ requests
 # PostgreSQL
 psycopg2-binary
 
+# Database migrations
+alembic
+
 # YAML config
 pyyaml
 

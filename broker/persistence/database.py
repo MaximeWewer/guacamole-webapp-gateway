@@ -1,14 +1,19 @@
 """
-Database connection and initialization for the Session Broker.
+Database connection pooling for the Session Broker.
+
+Uses psycopg2's ThreadedConnectionPool for thread-safe connection reuse.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import threading
 from contextlib import contextmanager
 from typing import Generator
 
 import psycopg2
+from psycopg2.pool import ThreadedConnectionPool
 
 from broker.config.settings import get_env
 
@@ -26,22 +31,88 @@ DB_CONFIG = {
     "port": int(DATABASE_PORT or "5432"),
     "database": DATABASE_NAME,
     "user": DATABASE_USER,
-    "password": DATABASE_PASSWORD
+    "password": DATABASE_PASSWORD,
 }
+
+# Pool configuration
+DB_POOL_MIN = int(os.environ.get("DB_POOL_MIN", "2"))
+DB_POOL_MAX = int(os.environ.get("DB_POOL_MAX", "8"))
+
+# Module-level pool and lock
+_pool: ThreadedConnectionPool | None = None
+_pool_lock = threading.Lock()
+
+
+def init_pool() -> None:
+    """Initialize the connection pool (idempotent).
+
+    Raises on failure so the application fails fast at startup
+    if the database is unreachable.
+    """
+    global _pool
+    if _pool is not None:
+        return
+    with _pool_lock:
+        if _pool is not None:
+            return
+        _pool = ThreadedConnectionPool(
+            DB_POOL_MIN,
+            DB_POOL_MAX,
+            **DB_CONFIG,
+        )
+        logger.info(
+            "Database connection pool initialized (min=%d, max=%d)",
+            DB_POOL_MIN,
+            DB_POOL_MAX,
+        )
+
+
+def close_pool() -> None:
+    """Close all connections in the pool (idempotent)."""
+    global _pool
+    if _pool is None:
+        return
+    with _pool_lock:
+        if _pool is None:
+            return
+        _pool.closeall()
+        _pool = None
+        logger.info("Database connection pool closed")
+
+
+def get_pool_stats() -> dict[str, int]:
+    """Return current pool statistics.
+
+    Returns zeros when the pool is not initialized.
+    """
+    if _pool is None:
+        return {"pool_size": 0, "pool_used": 0}
+    # _pool._used is a dict of connections currently checked out
+    # _pool._pool is a list of idle connections
+    used = len(getattr(_pool, "_used", {}))
+    idle = len(getattr(_pool, "_pool", []))
+    return {"pool_size": used + idle, "pool_used": used}
 
 
 @contextmanager
 def get_db_connection() -> Generator[psycopg2.extensions.connection, None, None]:
-    """
-    Context manager for database connections.
+    """Context manager for database connections from the pool.
 
     Yields:
         Database connection
 
     Note:
         Commits on success, rolls back on exception.
+        The connection is always returned to the pool.
+
+    Raises:
+        RuntimeError: If the pool has not been initialized.
     """
-    conn = psycopg2.connect(**DB_CONFIG)
+    if _pool is None:
+        raise RuntimeError(
+            "Database pool not initialized. Call init_pool() first."
+        )
+    conn = _pool.getconn()
     try:
         yield conn
         conn.commit()
@@ -49,108 +120,4 @@ def get_db_connection() -> Generator[psycopg2.extensions.connection, None, None]
         conn.rollback()
         raise
     finally:
-        conn.close()
-
-
-def init_database() -> None:
-    """Initialize database tables for the broker."""
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-            # Sessions table
-            # Note: username can be NULL for pool containers (pre-warmed, unclaimed)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS broker_sessions (
-                    session_id VARCHAR(36) PRIMARY KEY,
-                    username VARCHAR(255),
-                    guac_connection_id VARCHAR(36),
-                    vnc_password VARCHAR(64),
-                    container_id VARCHAR(64),
-                    container_ip VARCHAR(45),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    started_at TIMESTAMP,
-                    last_activity TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            # Add last_activity column if it doesn't exist (migration)
-            cur.execute("""
-                ALTER TABLE broker_sessions
-                ADD COLUMN IF NOT EXISTS last_activity TIMESTAMP
-            """)
-
-            # Migration: remove NOT NULL and UNIQUE constraint from username column
-            # to support pool containers with NULL username
-            cur.execute("""
-                ALTER TABLE broker_sessions
-                ALTER COLUMN username DROP NOT NULL
-            """)
-            # Drop the unique constraint if it exists
-            cur.execute("""
-                DO $$
-                BEGIN
-                    ALTER TABLE broker_sessions DROP CONSTRAINT IF EXISTS broker_sessions_username_key;
-                EXCEPTION WHEN undefined_object THEN
-                    NULL;
-                END $$;
-            """)
-
-            # Groups table
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS broker_groups (
-                    group_name VARCHAR(255) PRIMARY KEY,
-                    description TEXT,
-                    priority INTEGER DEFAULT 0,
-                    wallpaper VARCHAR(255),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            # Bookmarks table
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS broker_bookmarks (
-                    id SERIAL PRIMARY KEY,
-                    group_name VARCHAR(255) REFERENCES broker_groups(group_name) ON DELETE CASCADE,
-                    name VARCHAR(255) NOT NULL,
-                    url TEXT NOT NULL,
-                    position INTEGER DEFAULT 0,
-                    UNIQUE(group_name, url)
-                )
-            """)
-
-            # Settings table
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS broker_settings (
-                    key VARCHAR(255) PRIMARY KEY,
-                    value TEXT,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            # Indexes for performance
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_sessions_username ON broker_sessions(username)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_sessions_connection ON broker_sessions(guac_connection_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_bookmarks_group ON broker_bookmarks(group_name)")
-
-            # Partial unique index: ensure non-null usernames are unique
-            cur.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_username_unique
-                ON broker_sessions(username) WHERE username IS NOT NULL
-            """)
-
-            # Initialize default settings
-            cur.execute("""
-                INSERT INTO broker_settings (key, value)
-                VALUES ('merge_bookmarks', 'true'), ('inherit_from_default', 'true')
-                ON CONFLICT (key) DO NOTHING
-            """)
-
-            # Create default group if not exists
-            cur.execute("""
-                INSERT INTO broker_groups (group_name, description, priority)
-                VALUES ('default', 'Default configuration for all users', 0)
-                ON CONFLICT (group_name) DO NOTHING
-            """)
-
-    logger.info("Database initialized")
+        _pool.putconn(conn)

@@ -69,11 +69,13 @@ init_metrics(app)
 # Import and Initialize Modules
 # =============================================================================
 
-# Initialize database (must be done before other imports that use DB)
-from broker.persistence.database import init_database
+# Initialize database pool and run migrations
+from broker.persistence.database import init_pool
+from broker.persistence.migrations import run_migrations
 
 try:
-    init_database()
+    init_pool()
+    run_migrations()
 except Exception as e:
     logger.error(f"Database initialization error: {e}")
     raise

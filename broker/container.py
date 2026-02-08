@@ -65,6 +65,8 @@ class ServiceContainer:
             self._user_sync.stop()
         if self._monitor is not None:
             self._monitor.stop()
+        from broker.persistence.database import close_pool
+        close_pool()
 
 
 # Fallback for background threads (set once at startup in app.py)

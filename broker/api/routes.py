@@ -80,9 +80,13 @@ def health() -> RouteResponse:
     status = "healthy" if all_ok else ("degraded" if all_critical else "unhealthy")
     code = 200 if all_critical else 503
 
+    from broker.persistence.database import get_pool_stats
+    pool_stats = get_pool_stats()
+
     return jsonify({
         "status": status,
         "database": db_ok,
+        "database_pool": pool_stats,
         "guacamole": guac_ok,
         "services": {"monitor": monitor_ok, "user_sync": sync_ok},
         "vault": secrets_provider.use_vault,

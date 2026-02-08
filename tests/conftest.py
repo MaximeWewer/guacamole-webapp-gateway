@@ -243,7 +243,8 @@ def sample_session():
 @pytest.fixture
 def app_client(mocker, mock_db, mock_orchestrator, mock_guac_api, mock_broker_config, mock_services):
     """Create a Flask test_client with all external deps mocked."""
-    mocker.patch("broker.persistence.database.init_database")
+    mocker.patch("broker.persistence.database.init_pool")
+    mocker.patch("broker.persistence.migrations.run_migrations")
 
     # Patch routes-level imports that access DB / orchestrator
     mocker.patch("broker.api.routes.destroy_container")

@@ -1,5 +1,17 @@
 """Persistence module for database operations."""
 
-from broker.persistence.database import get_db_connection, init_database, DB_CONFIG
+from broker.persistence.database import (
+    DB_CONFIG,
+    close_pool,
+    get_db_connection,
+    get_pool_stats,
+    init_pool,
+)
 
-__all__ = ["get_db_connection", "init_database", "DB_CONFIG"]
+__all__ = [
+    "DB_CONFIG",
+    "close_pool",
+    "get_db_connection",
+    "get_pool_stats",
+    "init_pool",
+]
