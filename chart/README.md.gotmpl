@@ -1,0 +1,265 @@
+{{ template "chart.header" . }}
+
+{{ template "chart.badgesSection" . }}
+
+{{ template "chart.description" . }}
+
+## Prerequisites
+
+- Kubernetes 1.25+
+- Helm 3.10+
+- A running [Apache Guacamole](https://guacamole.apache.org/) instance (see [guacamole-helm](https://github.com/MaximeWewer/guacamole-helm))
+- A PostgreSQL database accessible from the cluster
+
+## Installation
+
+```bash
+helm repo add guacamole-webapp-gateway https://maximewewer.github.io/guacamole-webapp-gateway
+helm install gateway guacamole-webapp-gateway/guacamole-webapp-gateway \
+  --set guacamole.adminPassword="changeme" \
+  --set database.password="changeme" \
+  --set apiKey.value="my-secret-api-key"
+```
+
+Or with an existing secret:
+
+```bash
+helm install gateway guacamole-webapp-gateway/guacamole-webapp-gateway \
+  --set guacamole.existingSecret="guacamole-secret" \
+  --set database.existingSecret="database-secret" \
+  --set apiKey.existingSecret="broker-api-key-secret"
+```
+
+## Architecture
+
+```
+                    +-------------------+
+                    |   Guacamole Web   |
+                    +--------+----------+
+                             |
+                    +--------v----------+
+                    |  Session Broker   |  <-- this chart
+                    |  (Flask API)      |
+                    +--+------+------+--+
+                       |      |      |
+              +--------+  +---+----+ +---------+
+              |           |        |           |
+        +-----v-----+ +---v----+ +-v--------+  |
+        | PostgreSQL | | guacd | | Guac API |  |
+        +------------+ +-------+ +----------+  |
+                                               |
+                    +--------------------------v----+
+                    |  VNC Pods (managed by broker) |
+                    +-------------------------------+
+```
+
+The broker manages the full lifecycle of VNC containers:
+
+1. **User Sync** -- Periodically syncs Guacamole users and provisions connections
+2. **Container Pool** -- Pre-warms VNC containers for instant session start
+3. **Session Management** -- Spawns/destroys containers on connect/disconnect
+4. **Group Config** -- Per-group browser profiles (bookmarks, homepage, autofill)
+
+## API Documentation
+
+Once deployed, the interactive Swagger UI is available at `/apidocs` on the broker service.
+The OpenAPI JSON spec is served at `/apispec_1.json`.
+
+## Vault Integration
+
+The broker supports [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) for secret management.
+This allows using `${vault:key}` variables in user profile autofill credentials.
+
+```yaml
+vault:
+  enabled: true
+  address: "https://vault.example.com"
+  roleId: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  secretId: "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+
+profiles:
+  developers:
+    autofill:
+      - url: "https://gitlab.example.com/users/sign_in"
+        username: "${GUAC_USERNAME}"
+        password: "${vault:gitlab_password}"
+```
+
+## User Profiles
+
+Profiles define per-group browser configuration (bookmarks, homepage, autofill).
+They are defined inline in `values.yaml` under the `profiles` key, or via an external ConfigMap.
+
+Supported variable expansion:
+
+| Variable | Description |
+|----------|-------------|
+| `${GUAC_USERNAME}` | Guacamole username of the connected user |
+| `${vault:key}` | Secret from Vault (requires `vault.enabled: true`) |
+| `${env:VAR}` | Environment variable from the broker container |
+
+## Values
+
+### Guacamole Connection
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if or (hasPrefix "guacamole." .Key) (eq .Key "guacamole") }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Database
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if or (hasPrefix "database." .Key) (eq .Key "database") (hasPrefix "databasePool" .Key) }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Vault / OpenBao
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "vault" .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Broker Deployment
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if or (hasPrefix "image" .Key) (eq .Key "imagePullSecrets") (eq .Key "replicaCount") (eq .Key "resources") (eq .Key "nodeSelector") (eq .Key "tolerations") (eq .Key "affinity") (eq .Key "podAnnotations") (eq .Key "podSecurityContext") (eq .Key "securityContext") }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### API Key Authentication
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "apiKey" .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Service
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "service" .Key }}
+{{- if not (hasPrefix "serviceAccount" .Key) }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+{{- end }}
+
+### Container Orchestrator (Kubernetes)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "orchestrator" .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### VNC Containers
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "vnc" .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### User Synchronization
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "sync" .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Container Pool
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "pool" .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Container Lifecycle
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "lifecycle" .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Guacamole Interface
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "guacamoleSettings" .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Security & Rate Limiting
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "security" .Key }}
+{{- if not (eq .Key "securityContext") }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+{{- end }}
+
+### Logging
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "logging" .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### User Profiles
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if or (hasPrefix "profiles" .Key) (eq .Key "externalProfilesConfigMap") }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### RBAC
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if or (hasPrefix "serviceAccount" .Key) (hasPrefix "rbac" .Key) }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}

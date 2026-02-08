@@ -1,5 +1,7 @@
+# yaml-language-server: $schema=values.schema.json
+
 # =============================================================================
-# Guacamole Session Broker - Helm Chart Values
+# Guacamole Webapp Gateway - Helm Chart Values
 # =============================================================================
 # This chart deploys the Session Broker AFTER guacamole-helm has been deployed.
 # See: https://github.com/MaximeWewer/guacamole-helm
@@ -9,30 +11,34 @@
 # Guacamole Connection (existing deployment)
 # -----------------------------------------------------------------------------
 guacamole:
-  # URL of the Guacamole service (K8s service name or external URL)
+  # -- URL of the Guacamole service (K8s service name or external URL)
   url: "http://guacamole:8080/guacamole"
-  # Admin username
+  # -- Admin username
   adminUser: guacadmin
-  # Admin password (required if existingSecret not set)
+  # -- Admin password (required if existingSecret not set)
   adminPassword: ""
-  # Use an existing secret for the admin password
+  # -- Use an existing secret for the admin password
   existingSecret: ""
+  # -- Key in the existing secret containing the password
   existingSecretKey: "password"
 
 # -----------------------------------------------------------------------------
 # Database Connection (PostgreSQL from guacamole-helm or external)
 # -----------------------------------------------------------------------------
 database:
-  # PostgreSQL hostname (K8s service name or external host)
+  # -- PostgreSQL hostname (K8s service name or external host)
   host: "guacamole-postgresql"
+  # -- PostgreSQL port
   port: 5432
-  # Database name for the broker (can be same as Guacamole)
+  # -- Database name for the broker (can be same as Guacamole)
   name: "guacamole"
+  # -- Database user
   user: "guacamole"
-  # Password (required if existingSecret not set)
+  # -- Password (required if existingSecret not set)
   password: ""
-  # Use an existing secret for the database password
+  # -- Use an existing secret for the database password
   existingSecret: ""
+  # -- Key in the existing secret containing the password
   existingSecretKey: "password"
 
 # -----------------------------------------------------------------------------
@@ -40,34 +46,42 @@ database:
 # -----------------------------------------------------------------------------
 # Allows using ${vault:key} in autofill credentials
 vault:
+  # -- Enable Vault/OpenBao secret provider
   enabled: false
-  # Vault server address
+  # -- Vault server address
   address: ""
-  # Auth by token (for development)
+  # -- Auth by token (for development)
   token: ""
-  # Auth by AppRole (recommended for production)
+  # -- AppRole role ID (recommended for production)
   roleId: ""
+  # -- AppRole secret ID
   secretId: ""
-  # Existing secret containing Vault credentials
+  # -- Existing secret containing Vault credentials
   # Keys: VAULT_TOKEN or VAULT_ROLE_ID + VAULT_SECRET_ID
   existingSecret: ""
-  # Vault mount path
+  # -- Vault mount path
   mount: "secret"
-  # Path to secrets in Vault
+  # -- Path to secrets in Vault
   path: "guacamole/broker"
 
 # -----------------------------------------------------------------------------
 # Broker Deployment
 # -----------------------------------------------------------------------------
 image:
-  repository: ghcr.io/maximewewer/guacamole-broker
+  # -- Container image repository
+  repository: ghcr.io/maximewewer/guacamole-webapp-gateway
+  # -- Container image tag
   tag: latest
+  # -- Image pull policy
   pullPolicy: IfNotPresent
 
+# -- Image pull secrets for the broker pod
 imagePullSecrets: []
 
+# -- Number of broker replicas
 replicaCount: 1
 
+# -- Resource requests and limits for the broker pod
 resources:
   requests:
     memory: "128Mi"
@@ -76,50 +90,60 @@ resources:
     memory: "512Mi"
     cpu: "500m"
 
+# -- Node selector for broker pod scheduling
 nodeSelector: {}
 
+# -- Tolerations for broker pod scheduling
 tolerations: []
 
+# -- Affinity rules for broker pod scheduling
 affinity: {}
 
+# -- Additional annotations for the broker pod
 podAnnotations: {}
 
+# -- Pod-level security context
 podSecurityContext: {}
 
+# -- Container-level security context
 securityContext: {}
 
-# API key for the broker (required)
+# -- API key for authenticating with the broker API
 apiKey:
-  # Plaintext key (required if existingSecret not set)
+  # -- Plaintext API key value (required if existingSecret not set)
   value: ""
-  # Use an existing secret containing the API key
+  # -- Use an existing secret containing the API key
   existingSecret: ""
+  # -- Key in the existing secret containing the API key
   existingSecretKey: "api-key"
 
-# Service configuration
+# -- Service configuration
 service:
+  # -- Kubernetes service type
   type: ClusterIP
+  # -- Service port
   port: 5000
 
 # -----------------------------------------------------------------------------
 # Container Orchestrator (Kubernetes mode)
 # -----------------------------------------------------------------------------
 orchestrator:
-  # Namespace for VNC pods (defaults to release namespace)
+  # -- Namespace for VNC pods
+  # @default -- Release namespace
   namespace: ""
-  # Labels applied to all VNC pods
+  # -- Labels applied to all VNC pods
   labels:
     app: vnc-session
-    managed-by: guacamole-broker
-  # Image pull policy for VNC pods: Always, IfNotPresent, Never
+    managed-by: guacamole-webapp-gateway
+  # -- Image pull policy for VNC pods: Always, IfNotPresent, Never
   imagePullPolicy: IfNotPresent
-  # Image pull secrets for VNC pods
+  # -- Image pull secrets for VNC pods
   imagePullSecrets: []
-  # Node selector for VNC pod scheduling
+  # -- Node selector for VNC pod scheduling
   nodeSelector: {}
-  # Tolerations for VNC pod scheduling
+  # -- Tolerations for VNC pod scheduling
   tolerations: []
-  # Security context for VNC pods
+  # -- Security context for VNC pods
   securityContext:
     runAsNonRoot: false
     runAsUser: 1000
@@ -129,13 +153,15 @@ orchestrator:
 # -----------------------------------------------------------------------------
 vnc:
   image:
+    # -- VNC container image repository
     repository: ghcr.io/maximewewer/docker-browser-vnc
+    # -- VNC container image tag
     tag: 2026.01.2-chromium
-  # Connection name displayed in Guacamole
+  # -- Connection name displayed in Guacamole
   connectionName: "Virtual Desktop"
-  # Timeout in seconds to wait for VNC to be ready
+  # -- Timeout in seconds to wait for VNC to be ready
   timeout: 30
-  # Resource limits for VNC pods
+  # -- Resource requests and limits for VNC pods
   resources:
     requests:
       memory: "512Mi"
@@ -148,64 +174,65 @@ vnc:
 # User Synchronization
 # -----------------------------------------------------------------------------
 sync:
-  # Sync interval in seconds
+  # -- Sync interval in seconds
   interval: 10
-  # Users to ignore during sync (system accounts)
+  # -- Users to ignore during sync (system accounts)
   ignoredUsers:
     - guacadmin
-  # Force update existing connections on broker restart
+  # -- Force update existing connections on broker restart
   syncConfigOnRestart: true
 
 # -----------------------------------------------------------------------------
 # Container Pool (Pre-warming)
 # -----------------------------------------------------------------------------
 pool:
-  # Enable container pre-warming
+  # -- Enable container pre-warming
   enabled: true
-  # Containers to start at broker startup
+  # -- Containers to start at broker startup
   initContainers: 2
-  # Maximum number of containers
+  # -- Maximum number of containers
   maxContainers: 10
-  # Containers to start per sync cycle
+  # -- Containers to start per sync cycle
   batchSize: 3
-  # Resource limits for pool management
+  # -- Resource limits for pool management
   resources:
-    # Minimum free RAM required to start a new container (GB)
+    # -- Minimum free RAM required to start a new container (GB)
     minFreeMemoryGb: 2.0
-    # Maximum total RAM for all VNC containers (GB), 0 = no limit
+    # -- Maximum total RAM for all VNC containers (GB), 0 = no limit
     maxTotalMemoryGb: 16.0
-    # Maximum percentage of total RAM, 0 = no limit
+    # -- Maximum percentage of total RAM, 0 = no limit
     maxMemoryPercent: 0.75
 
 # -----------------------------------------------------------------------------
 # Container Lifecycle Management
 # -----------------------------------------------------------------------------
 lifecycle:
-  # Keep containers running after user disconnects
+  # -- Keep containers running after user disconnects
   persistAfterDisconnect: true
-  # Idle timeout in minutes (after disconnect)
+  # -- Idle timeout in minutes (after disconnect)
   idleTimeoutMinutes: 3
-  # Force kill oldest inactive containers when resources are low
+  # -- Force kill oldest inactive containers when resources are low
   forceKillOnLowResources: true
 
 # -----------------------------------------------------------------------------
 # Guacamole Interface Settings
 # -----------------------------------------------------------------------------
 guacamoleSettings:
-  # Force display of home page instead of auto-connecting
+  # -- Force display of home page instead of auto-connecting
   forceHomePage: true
-  # Name of the placeholder home connection
+  # -- Name of the placeholder home connection
   homeConnectionName: "Home"
-  # Session recording configuration
+  # -- Session recording configuration
   recording:
+    # -- Enable session recording
     enabled: true
-    # Path inside guacd container (use Guacamole variables)
+    # -- Path inside guacd container (use Guacamole variables)
     path: "${HISTORY_PATH}/${HISTORY_UUID}"
-    # Recording filename pattern
+    # -- Recording filename pattern
     name: ""
-    # Include keyboard input in recordings
+    # -- Include keyboard input in recordings
     includeKeys: false
-    # Auto-create recording path
+    # -- Auto-create recording path
     autoCreatePath: true
 
 # -----------------------------------------------------------------------------
@@ -213,28 +240,29 @@ guacamoleSettings:
 # -----------------------------------------------------------------------------
 security:
   rateLimiting:
+    # -- Enable rate limiting
     enabled: true
-    # Default limit for read endpoints
+    # -- Default limit for read endpoints
     defaultLimit: "200/minute"
-    # Stricter limit for write/admin endpoints
+    # -- Stricter limit for write/admin endpoints
     adminLimit: "10/minute"
 
 # -----------------------------------------------------------------------------
 # Database Pool
 # -----------------------------------------------------------------------------
 databasePool:
-  # Minimum connections in the pool
+  # -- Minimum connections in the pool
   minConnections: 2
-  # Maximum connections in the pool
+  # -- Maximum connections in the pool
   maxConnections: 8
 
 # -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
 logging:
-  # Log level: DEBUG, INFO, WARNING, ERROR
+  # -- Log level: DEBUG, INFO, WARNING, ERROR
   level: INFO
-  # Log format: json or text
+  # -- Log format: json or text
   format: json
 
 # -----------------------------------------------------------------------------
@@ -258,6 +286,8 @@ logging:
 #       - url: "https://github.com/login"
 #         username: "${GUAC_USERNAME}"
 #         password: "${vault:github_password}"
+
+# -- Browser profiles per Guacamole user group
 profiles:
   default:
     description: "Default profile for all users"
@@ -269,21 +299,22 @@ profiles:
       - name: "DuckDuckGo"
         url: "https://duckduckgo.com"
 
-# Use an external ConfigMap for profiles instead of inline
-# If set, the profiles section above is ignored
+# -- Use an external ConfigMap for profiles instead of inline.
+# If set, the profiles section above is ignored.
 externalProfilesConfigMap: ""
 
 # -----------------------------------------------------------------------------
 # RBAC
 # -----------------------------------------------------------------------------
 serviceAccount:
-  # Create a service account for the broker
+  # -- Create a service account for the broker
   create: true
-  # Annotations for the service account
+  # -- Annotations for the service account
   annotations: {}
-  # Name override (defaults to release fullname)
+  # -- Name override
+  # @default -- Release fullname
   name: ""
 
 rbac:
-  # Create Role and RoleBinding for pod management
+  # -- Create Role and RoleBinding for pod management
   create: true

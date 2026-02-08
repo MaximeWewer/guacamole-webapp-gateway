@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "guacamole-broker.fullname" . }}-config
+  name: {{ include "guacamole-webapp-gateway.fullname" . }}-config
   labels:
-    {{- include "guacamole-broker.labels" . | nindent 4 }}
+    {{- include "guacamole-webapp-gateway.labels" . | nindent 4 }}
 data:
   broker.yml: |
     # =============================================================================
@@ -17,8 +17,8 @@ data:
       backend: kubernetes
 
       kubernetes:
-        namespace: {{ include "guacamole-broker.vncNamespace" . | quote }}
-        service_account: {{ include "guacamole-broker.serviceAccountName" . | quote }}
+        namespace: {{ include "guacamole-webapp-gateway.vncNamespace" . | quote }}
+        service_account: {{ include "guacamole-webapp-gateway.serviceAccountName" . | quote }}
         labels:
           {{- .Values.orchestrator.labels | toYaml | nindent 10 }}
         image_pull_policy: {{ .Values.orchestrator.imagePullPolicy | quote }}

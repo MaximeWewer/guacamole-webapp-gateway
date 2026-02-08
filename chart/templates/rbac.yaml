@@ -2,9 +2,9 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "guacamole-broker.serviceAccountName" . }}
+  name: {{ include "guacamole-webapp-gateway.serviceAccountName" . }}
   labels:
-    {{- include "guacamole-broker.labels" . | nindent 4 }}
+    {{- include "guacamole-webapp-gateway.labels" . | nindent 4 }}
   {{- with .Values.serviceAccount.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -15,9 +15,9 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "guacamole-broker.fullname" . }}
+  name: {{ include "guacamole-webapp-gateway.fullname" . }}
   labels:
-    {{- include "guacamole-broker.labels" . | nindent 4 }}
+    {{- include "guacamole-webapp-gateway.labels" . | nindent 4 }}
 rules:
   # Pod management for VNC containers
   - apiGroups: [""]
@@ -37,15 +37,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "guacamole-broker.fullname" . }}
+  name: {{ include "guacamole-webapp-gateway.fullname" . }}
   labels:
-    {{- include "guacamole-broker.labels" . | nindent 4 }}
+    {{- include "guacamole-webapp-gateway.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "guacamole-broker.fullname" . }}
+  name: {{ include "guacamole-webapp-gateway.fullname" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "guacamole-broker.serviceAccountName" . }}
+    name: {{ include "guacamole-webapp-gateway.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}

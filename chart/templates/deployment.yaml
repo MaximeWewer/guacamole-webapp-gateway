@@ -1,14 +1,14 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "guacamole-broker.fullname" . }}
+  name: {{ include "guacamole-webapp-gateway.fullname" . }}
   labels:
-    {{- include "guacamole-broker.labels" . | nindent 4 }}
+    {{- include "guacamole-webapp-gateway.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "guacamole-broker.selectorLabels" . | nindent 6 }}
+      {{- include "guacamole-webapp-gateway.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
@@ -18,13 +18,13 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "guacamole-broker.labels" . | nindent 8 }}
+        {{- include "guacamole-webapp-gateway.labels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "guacamole-broker.serviceAccountName" . }}
+      serviceAccountName: {{ include "guacamole-webapp-gateway.serviceAccountName" . }}
       {{- with .Values.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
@@ -50,7 +50,7 @@ spec:
             - name: GUACAMOLE_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "guacamole-broker.guacamoleSecretName" . }}
+                  name: {{ include "guacamole-webapp-gateway.guacamoleSecretName" . }}
                   key: {{ .Values.guacamole.existingSecretKey | default "password" }}
             # Database connection
             - name: DATABASE_HOST
@@ -64,7 +64,7 @@ spec:
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "guacamole-broker.databaseSecretName" . }}
+                  name: {{ include "guacamole-webapp-gateway.databaseSecretName" . }}
                   key: {{ .Values.database.existingSecretKey | default "password" }}
             # Database pool
             - name: DB_POOL_MIN
@@ -75,7 +75,7 @@ spec:
             - name: BROKER_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "guacamole-broker.apiKeySecretName" . }}
+                  name: {{ include "guacamole-webapp-gateway.apiKeySecretName" . }}
                   key: {{ .Values.apiKey.existingSecretKey | default "api-key" }}
             # Logging
             - name: LOG_LEVEL
@@ -84,9 +84,9 @@ spec:
             - name: ORCHESTRATOR_BACKEND
               value: "kubernetes"
             - name: KUBERNETES_NAMESPACE
-              value: {{ include "guacamole-broker.vncNamespace" . | quote }}
+              value: {{ include "guacamole-webapp-gateway.vncNamespace" . | quote }}
             - name: KUBERNETES_SERVICE_ACCOUNT
-              value: {{ include "guacamole-broker.serviceAccountName" . | quote }}
+              value: {{ include "guacamole-webapp-gateway.serviceAccountName" . | quote }}
             {{- if .Values.vault.enabled }}
             # Vault settings
             - name: VAULT_ADDR
@@ -95,19 +95,19 @@ spec:
             - name: VAULT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "guacamole-broker.vaultSecretName" . }}
+                  name: {{ include "guacamole-webapp-gateway.vaultSecretName" . }}
                   key: token
             {{- end }}
             {{- if and (not .Values.vault.existingSecret) .Values.vault.roleId }}
             - name: VAULT_ROLE_ID
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "guacamole-broker.vaultSecretName" . }}
+                  name: {{ include "guacamole-webapp-gateway.vaultSecretName" . }}
                   key: role-id
             - name: VAULT_SECRET_ID
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "guacamole-broker.vaultSecretName" . }}
+                  name: {{ include "guacamole-webapp-gateway.vaultSecretName" . }}
                   key: secret-id
             {{- end }}
             {{- if .Values.vault.existingSecret }}
@@ -160,7 +160,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ include "guacamole-broker.fullname" . }}-config
+            name: {{ include "guacamole-webapp-gateway.fullname" . }}-config
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
