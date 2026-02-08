@@ -33,6 +33,12 @@ When a user logs in, the broker automatically provisions a dedicated VNC contain
 - **Container pre-warming** - Pool of ready containers for instant connections
 - **Auto-provisioning** - Containers created/destroyed based on user activity
 - **Enterprise policies** - Firefox/Chromium managed policies for lockdown
+- **API key authentication** - Secure API access with key-based auth
+- **Rate limiting** - Configurable per-endpoint rate limits
+- **OpenAPI documentation** - Interactive Swagger UI at `/apidocs`
+- **Database connection pooling** - Efficient PostgreSQL connection management
+- **Structured logging** - JSON or text log output with configurable levels
+- **Prometheus metrics** - Built-in observability endpoints
 
 ## Architecture
 
@@ -48,13 +54,13 @@ When a user logs in, the broker automatically provisions a dedicated VNC contain
 └────────────────────────────────────────────────────────────────┘
                               ↓
 ┌────────────────────────────────────────────────────────────────┐
-│                    STEP 2: guacamole-broker                    │
+│              STEP 2: guacamole-webapp-gateway                  │
 │  (this chart - standalone deployment)                          │
 ├────────────────────────────────────────────────────────────────┤
 │  - Session Broker (Flask API)                                  │
 │  - RBAC for VNC pod management                                 │
 │  - ConfigMap (broker.yml, profiles.yml)                        │
-│  - Secret (Guacamole credentials)                              │
+│  - Secret (Guacamole credentials, API key)                     │
 └────────────────────────────────────────────────────────────────┘
                               ↓
 ┌────────────────────────────────────────────────────────────────┐
@@ -79,7 +85,7 @@ When a user logs in, the broker automatically provisions a dedicated VNC contain
 ## Requirements
 
 - Kubernetes 1.25+
-- Helm 3.x
+- Helm 3.10+
 - [guacamole-helm](https://github.com/MaximeWewer/guacamole-helm) deployed
 - 4GB RAM minimum (8GB+ recommended for multiple users)
 
@@ -109,30 +115,41 @@ PGPASSWORD=$(kubectl get secret guacamole-postgresql -n guacamole \
 ### 3. Deploy the Session Broker
 
 ```bash
-# Clone this repository
-git clone https://github.com/MaximeWewer/guacamole-webapp-gateway.git
-cd guacamole-webapp-gateway
+# Add the Helm repository
+helm repo add guacamole-webapp-gateway https://maximewewer.github.io/guacamole-webapp-gateway
+helm repo update
 
 # Install the broker
-helm install broker ./chart \
+helm install gateway guacamole-webapp-gateway/guacamole-webapp-gateway \
   --namespace guacamole \
   --set guacamole.url=http://guacamole:8080/guacamole \
   --set guacamole.adminPassword=guacadmin \
   --set database.host=guacamole-postgresql \
-  --set database.password=$PGPASSWORD
+  --set database.password=$PGPASSWORD \
+  --set apiKey.value="my-secret-api-key"
+```
+
+Or with existing secrets:
+
+```bash
+helm install gateway guacamole-webapp-gateway/guacamole-webapp-gateway \
+  --namespace guacamole \
+  --set guacamole.existingSecret="guacamole-secret" \
+  --set database.existingSecret="database-secret" \
+  --set apiKey.existingSecret="broker-api-key-secret"
 ```
 
 ### 4. Verify deployment
 
 ```bash
 # Check pods
-kubectl get pods -n guacamole -l app.kubernetes.io/name=guacamole-broker
+kubectl get pods -n guacamole -l app.kubernetes.io/name=guacamole-webapp-gateway
 
 # Check logs
-kubectl logs -n guacamole -l app.kubernetes.io/name=guacamole-broker
+kubectl logs -n guacamole -l app.kubernetes.io/name=guacamole-webapp-gateway
 
 # Test health endpoint
-kubectl port-forward -n guacamole svc/broker-guacamole-broker 5000:5000
+kubectl port-forward -n guacamole svc/gateway-guacamole-webapp-gateway 5000:5000
 curl http://localhost:5000/health
 ```
 
@@ -158,6 +175,12 @@ database:
   user: "guacamole"
   password: ""
   existingSecret: ""  # Use existing secret instead
+
+# API key authentication
+apiKey:
+  value: ""             # Plaintext API key
+  existingSecret: ""    # Or use an existing secret
+  existingSecretKey: "api-key"
 
 # VNC container configuration
 vnc:
@@ -232,6 +255,67 @@ vault kv put secret/guacamole/broker \
   intranet_password="yyy"
 ```
 
+### Security
+
+#### API key authentication
+
+All API endpoints (except `/health`) require an `X-API-Key` header:
+
+```bash
+curl -H "X-API-Key: my-secret-api-key" http://localhost:5000/api/sessions
+```
+
+Configure via Helm values:
+
+```yaml
+apiKey:
+  value: "my-secret-api-key"
+  # Or reference an existing Kubernetes secret
+  existingSecret: "my-secret"
+  existingSecretKey: "api-key"
+```
+
+#### Rate limiting
+
+The broker enforces per-endpoint rate limits to prevent abuse:
+
+```yaml
+security:
+  rateLimiting:
+    enabled: true
+    defaultLimit: "200/minute"   # Read endpoints
+    adminLimit: "10/minute"      # Write/admin endpoints
+```
+
+### Database connection pooling
+
+PostgreSQL connections are managed via a connection pool:
+
+```yaml
+databasePool:
+  minConnections: 2    # Minimum idle connections
+  maxConnections: 8    # Maximum concurrent connections
+```
+
+### Logging
+
+```yaml
+logging:
+  level: INFO          # DEBUG, INFO, WARNING, ERROR
+  format: json         # json or text
+```
+
+## API documentation
+
+Once deployed, the interactive **Swagger UI** is available at `/apidocs` on the broker service:
+
+```bash
+kubectl port-forward -n guacamole svc/gateway-guacamole-webapp-gateway 5000:5000
+open http://localhost:5000/apidocs
+```
+
+The **OpenAPI JSON spec** is served at `/apispec_1.json`.
+
 ## VNC container images
 
 This project uses [docker-browser-vnc](https://github.com/MaximeWewer/docker-browser-vnc):
@@ -291,37 +375,61 @@ pool:
 
 ## API reference
 
-The broker exposes a REST API on port 5000.
+The broker exposes a REST API on port 5000. All endpoints except `/health` require an `X-API-Key` header.
 
-### Health & status
+### Health & Config
 
-| Endpoint              | Method | Description                           |
-| --------------------- | ------ | ------------------------------------- |
-| `/health`             | GET    | Health check (database, vault status) |
-| `/api/config`         | GET    | Broker configuration summary          |
-| `/api/secrets/status` | GET    | Secrets provider status               |
+| Endpoint              | Method | Auth | Description                           |
+| --------------------- | ------ | ---- | ------------------------------------- |
+| `/health`             | GET    | No   | Health check (database, vault status) |
+| `/api/config`         | GET    | Yes  | Broker configuration summary          |
+| `/api/secrets/status` | GET    | Yes  | Secrets provider status               |
 
 ### Sessions
 
-| Endpoint             | Method | Description             |
-| -------------------- | ------ | ----------------------- |
-| `/api/sessions`      | GET    | List all sessions       |
-| `/api/sessions/<id>` | DELETE | Force cleanup a session |
+| Endpoint             | Method | Auth | Description             |
+| -------------------- | ------ | ---- | ----------------------- |
+| `/api/sessions`      | GET    | Yes  | List all sessions       |
+| `/api/sessions/<id>` | DELETE | Yes  | Force cleanup a session |
 
 ### User operations
 
-| Endpoint                               | Method | Description                |
-| -------------------------------------- | ------ | -------------------------- |
-| `/api/users/<username>/provision`      | POST   | Provision VNC connection   |
-| `/api/users/<username>/groups`         | GET    | Get user's groups & config |
-| `/api/users/<username>/refresh-config` | POST   | Reload group configuration |
+| Endpoint                               | Method | Auth | Description                    |
+| -------------------------------------- | ------ | ---- | ------------------------------ |
+| `/api/users/<username>/provision`      | POST   | Yes  | Provision VNC connection       |
+| `/api/users/<username>/groups`         | GET    | Yes  | Get user's groups & config     |
+| `/api/users/<username>/refresh-config` | POST   | Yes  | Reload group configuration     |
+| `/api/users/<username>/bookmarks`      | POST   | Yes  | Update user bookmarks          |
+| `/api/users/<username>/profile`        | GET    | Yes  | Get user's resolved profile    |
+
+### Groups
+
+| Endpoint               | Method | Auth | Description                  |
+| ---------------------- | ------ | ---- | ---------------------------- |
+| `/api/groups`          | GET    | Yes  | List all group configs       |
+| `/api/groups/<name>`   | GET    | Yes  | Get a group configuration    |
+| `/api/groups/<name>`   | PUT    | Yes  | Create/update a group config |
+| `/api/groups/<name>`   | DELETE | Yes  | Delete a group configuration |
+
+### Settings
+
+| Endpoint        | Method | Auth | Description             |
+| --------------- | ------ | ---- | ----------------------- |
+| `/api/settings` | GET    | Yes  | Get broker settings     |
+| `/api/settings` | PUT    | Yes  | Update broker settings  |
 
 ### Sync
 
-| Endpoint    | Method | Description              |
-| ----------- | ------ | ------------------------ |
-| `/api/sync` | GET    | Sync service status      |
-| `/api/sync` | POST   | Trigger manual user sync |
+| Endpoint    | Method | Auth | Description              |
+| ----------- | ------ | ---- | ------------------------ |
+| `/api/sync` | GET    | Yes  | Sync service status      |
+| `/api/sync` | POST   | Yes  | Trigger manual user sync |
+
+### Guacamole
+
+| Endpoint                | Method | Auth | Description                    |
+| ----------------------- | ------ | ---- | ------------------------------ |
+| `/api/guacamole/groups` | GET    | Yes  | List Guacamole user groups     |
 
 ## Troubleshooting
 
@@ -331,10 +439,12 @@ Check resource limits and RBAC:
 
 ```bash
 # Check broker logs
-kubectl logs -n guacamole -l app.kubernetes.io/name=guacamole-broker
+kubectl logs -n guacamole -l app.kubernetes.io/name=guacamole-webapp-gateway
 
 # Check if service account has permissions
-kubectl auth can-i create pods --as=system:serviceaccount:guacamole:broker-guacamole-broker -n guacamole
+kubectl auth can-i create pods \
+  --as=system:serviceaccount:guacamole:gateway-guacamole-webapp-gateway \
+  -n guacamole
 ```
 
 ### VNC connection timeout
@@ -349,14 +459,14 @@ vnc:
 ### View broker logs
 
 ```bash
-kubectl logs -n guacamole -l app.kubernetes.io/name=guacamole-broker -f
+kubectl logs -n guacamole -l app.kubernetes.io/name=guacamole-webapp-gateway -f
 ```
 
 ### Force user sync
 
 ```bash
-kubectl exec -n guacamole deploy/broker-guacamole-broker -- \
-  curl -X POST http://localhost:5000/api/sync
+kubectl exec -n guacamole deploy/gateway-guacamole-webapp-gateway -- \
+  curl -s -H "X-API-Key: $API_KEY" -X POST http://localhost:5000/api/sync
 ```
 
 ## Project structure
@@ -364,14 +474,47 @@ kubectl exec -n guacamole deploy/broker-guacamole-broker -- \
 ```
 .
 ├── broker/                    # Session Broker (Python/Flask)
-│   ├── api/                   # REST API endpoints
-│   ├── config/                # Configuration loaders
+│   ├── app.py                 # Application factory
+│   ├── container.py           # Dependency injection container
+│   ├── observability.py       # Prometheus metrics & structured logging
+│   ├── resilience.py          # Circuit breaker & health checks
+│   ├── api/                   # REST API
+│   │   ├── routes.py          # Endpoint definitions
+│   │   ├── swagger.py         # OpenAPI/Swagger configuration
+│   │   ├── auth.py            # API key authentication
+│   │   ├── rate_limit.py      # Rate limiting
+│   │   ├── audit.py           # Audit logging
+│   │   ├── validators.py      # Input validation
+│   │   └── responses.py       # Standardized responses
+│   ├── config/                # Configuration
+│   │   ├── models.py          # Pydantic settings models
+│   │   ├── loader.py          # YAML config loader
+│   │   ├── secrets.py         # Vault/OpenBao integration
+│   │   └── settings.py        # Environment settings
 │   ├── domain/                # Core business logic
+│   │   ├── session.py         # Session management
+│   │   ├── guacamole.py       # Guacamole API client
+│   │   ├── user_profile.py    # User profile resolution
+│   │   ├── group_config.py    # Group configuration
+│   │   ├── container.py       # Container operations
+│   │   ├── types.py           # Domain types
+│   │   └── orchestrator/      # Container orchestrators
+│   │       ├── docker_orchestrator.py
+│   │       └── kubernetes_orchestrator.py
 │   ├── persistence/           # Database layer
-│   └── services/              # Background services
+│   │   ├── database.py        # Connection pooling
+│   │   └── migrations.py      # Alembic migrations
+│   ├── services/              # Background services
+│   │   ├── user_sync.py       # User synchronization
+│   │   ├── connection_monitor.py  # Connection monitoring
+│   │   └── provisioning.py    # Container provisioning
+│   └── migrations/            # Alembic migration scripts
+│       └── versions/
 ├── chart/                     # Helm chart
 │   ├── Chart.yaml
 │   ├── values.yaml
+│   ├── README.md              # Auto-generated by helm-docs
+│   ├── README.md.gotmpl       # helm-docs template
 │   └── templates/
 │       ├── _helpers.tpl
 │       ├── deployment.yaml
@@ -379,9 +522,12 @@ kubectl exec -n guacamole deploy/broker-guacamole-broker -- \
 │       ├── configmap.yaml
 │       ├── secret.yaml
 │       └── rbac.yaml
-└── config/                    # Example configuration files
-    ├── broker.yml             # Broker settings reference
-    └── profiles.yml           # User profiles reference
+├── config/                    # Example configuration files
+│   ├── broker.yml             # Broker settings reference
+│   ├── profiles.yml           # User profiles reference
+│   └── setup.yml              # Initial setup reference
+├── tests/                     # Test suite
+└── pyproject.toml             # Project metadata & tool config
 ```
 
 ## Related projects
