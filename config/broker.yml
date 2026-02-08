@@ -136,6 +136,29 @@ guacamole:
     auto_create_path: true
 
 # -----------------------------------------------------------------------------
+# Security
+# -----------------------------------------------------------------------------
+security:
+  # API key for authenticating requests to /api/* endpoints.
+  # /health remains public (no key required).
+  #
+  # The key can be provided in three ways (in priority order):
+  #   1. Vault: store it at the configured Vault path under "broker_api_key"
+  #   2. Environment variable: BROKER_API_KEY
+  #   3. Here in the config file (least secure, NOT recommended for production)
+  #
+  # If no key is configured at all the API operates in fail-closed mode:
+  # all /api/* requests will return 503 Service Unavailable.
+  #
+  # Clients must send the key via one of:
+  #   - Header:  X-API-Key: <key>
+  #   - Header:  Authorization: Bearer <key>
+  #
+  # Generate a strong key:
+  #   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+  api_key: ""
+
+# -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
 logging:

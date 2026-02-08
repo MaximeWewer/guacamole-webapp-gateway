@@ -9,6 +9,7 @@ from broker.api.validators import (
     escape_html_content,
 )
 from broker.api.responses import api_success, api_error
+from broker.api.auth import require_api_key
 
 __all__ = [
     "ValidationError",
@@ -19,4 +20,5 @@ __all__ = [
     "escape_html_content",
     "api_success",
     "api_error",
+    "require_api_key",
 ]

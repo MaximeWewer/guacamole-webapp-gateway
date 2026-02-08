@@ -30,6 +30,9 @@ logger = logging.getLogger("session-broker")
 # Create Blueprint
 api = Blueprint("api", __name__)
 
+from broker.api.auth import require_api_key
+api.before_request(require_api_key)
+
 # Configuration values for API
 GUACD_HOSTNAME = get_env("guacd_hostname", "guacd")
 DATABASE_HOST = get_env("database_host", "postgres")

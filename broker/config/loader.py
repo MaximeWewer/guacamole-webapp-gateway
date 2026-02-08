@@ -102,6 +102,7 @@ class BrokerConfig:
                     "auto_create_path": True
                 }
             },
+            "security": {"api_key": ""},
             "logging": {"level": "INFO"}
         }
 
