@@ -88,6 +88,14 @@ podSecurityContext: {}
 
 securityContext: {}
 
+# API key for the broker (required)
+apiKey:
+  # Plaintext key (required if existingSecret not set)
+  value: ""
+  # Use an existing secret containing the API key
+  existingSecret: ""
+  existingSecretKey: "api-key"
+
 # Service configuration
 service:
   type: ClusterIP
@@ -201,11 +209,33 @@ guacamoleSettings:
     autoCreatePath: true
 
 # -----------------------------------------------------------------------------
+# Security & Rate Limiting
+# -----------------------------------------------------------------------------
+security:
+  rateLimiting:
+    enabled: true
+    # Default limit for read endpoints
+    defaultLimit: "200/minute"
+    # Stricter limit for write/admin endpoints
+    adminLimit: "10/minute"
+
+# -----------------------------------------------------------------------------
+# Database Pool
+# -----------------------------------------------------------------------------
+databasePool:
+  # Minimum connections in the pool
+  minConnections: 2
+  # Maximum connections in the pool
+  maxConnections: 8
+
+# -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
 logging:
   # Log level: DEBUG, INFO, WARNING, ERROR
   level: INFO
+  # Log format: json or text
+  format: json
 
 # -----------------------------------------------------------------------------
 # User Profiles

@@ -95,6 +95,17 @@ Get the Vault secret name
 {{- end }}
 
 {{/*
+Get the API key secret name
+*/}}
+{{- define "guacamole-broker.apiKeySecretName" -}}
+{{- if .Values.apiKey.existingSecret }}
+{{- .Values.apiKey.existingSecret }}
+{{- else }}
+{{- include "guacamole-broker.fullname" . }}-api-key
+{{- end }}
+{{- end }}
+
+{{/*
 Get the namespace for VNC pods
 */}}
 {{- define "guacamole-broker.vncNamespace" -}}

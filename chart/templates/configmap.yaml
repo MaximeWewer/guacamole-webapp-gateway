@@ -103,10 +103,20 @@ data:
         auto_create_path: {{ .Values.guacamoleSettings.recording.autoCreatePath }}
 
     # -----------------------------------------------------------------------------
+    # Security & Rate Limiting
+    # -----------------------------------------------------------------------------
+    security:
+      rate_limiting:
+        enabled: {{ .Values.security.rateLimiting.enabled }}
+        default_limit: {{ .Values.security.rateLimiting.defaultLimit | quote }}
+        admin_limit: {{ .Values.security.rateLimiting.adminLimit | quote }}
+
+    # -----------------------------------------------------------------------------
     # Logging
     # -----------------------------------------------------------------------------
     logging:
       level: {{ .Values.logging.level }}
+      format: {{ .Values.logging.format }}
 
   {{- if not .Values.externalProfilesConfigMap }}
   profiles.yml: |
