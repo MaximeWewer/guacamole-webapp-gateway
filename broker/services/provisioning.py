@@ -35,107 +35,116 @@ def provision_user_connection(username: str) -> str:
     Returns:
         Guacamole connection ID
     """
-    # Check for existing session with running container
-    existing = SessionStore.get_session_by_username(username)
-    if existing and existing.guac_connection_id and existing.container_id:
-        return existing.guac_connection_id
+    from broker.observability import PROVISIONING_DURATION, ERRORS_TOTAL
+    start_time = time.time()
 
-    UserProfile.ensure_profile(username)
-
-    # Apply group configuration
     try:
-        user_groups = guac_api.get_user_groups(username)
-        applied_config = UserProfile.apply_group_config(username, user_groups)
-        logger.info(f"Configuration applied for {username}, groups: {applied_config.get('groups', [])}")
-    except Exception as e:
-        logger.warning(f"Unable to get groups for {username}: {e}")
+        # Check for existing session with running container
+        existing = SessionStore.get_session_by_username(username)
+        if existing and existing.guac_connection_id and existing.container_id:
+            return existing.guac_connection_id
 
-    # Try to claim a container from the pool first
-    pool_sessions = SessionStore.get_pool_sessions()
+        UserProfile.ensure_profile(username)
 
-    container_id = None
-    container_ip = None
-    session_id = None
-    vnc_password = None
-    claimed_from_pool = False
+        # Apply group configuration
+        try:
+            user_groups = guac_api.get_user_groups(username)
+            applied_config = UserProfile.apply_group_config(username, user_groups)
+            logger.info(f"Configuration applied for {username}, groups: {applied_config.get('groups', [])}")
+        except Exception as e:
+            logger.warning(f"Unable to get groups for {username}: {e}")
 
-    # Try to claim from pool
-    for pool_session in pool_sessions:
-        pool_session_id = pool_session.session_id
-        pool_container_id = pool_session.container_id
-        pool_container_ip = pool_session.container_ip
-        pool_vnc_password = pool_session.vnc_password
+        # Try to claim a container from the pool first
+        pool_sessions = SessionStore.get_pool_sessions()
 
-        if not pool_container_id or not pool_container_ip:
-            continue
+        container_id = None
+        container_ip = None
+        session_id = None
+        vnc_password = None
+        claimed_from_pool = False
 
-        # Try to claim the container in orchestrator first (updates labels)
-        if claim_container(pool_container_id, username):
-            # Then claim the session in database
-            if SessionStore.claim_pool_session(pool_session_id, username):
-                container_id = pool_container_id
-                container_ip = pool_container_ip
-                session_id = pool_session_id
-                vnc_password = pool_vnc_password
-                claimed_from_pool = True
-                logger.info(f"Claimed pool container {container_id} for {username}")
-                break
+        # Try to claim from pool
+        for pool_session in pool_sessions:
+            pool_session_id = pool_session.session_id
+            pool_container_id = pool_session.container_id
+            pool_container_ip = pool_session.container_ip
+            pool_vnc_password = pool_session.vnc_password
+
+            if not pool_container_id or not pool_container_ip:
+                continue
+
+            # Try to claim the container in orchestrator first (updates labels)
+            if claim_container(pool_container_id, username):
+                # Then claim the session in database
+                if SessionStore.claim_pool_session(pool_session_id, username):
+                    container_id = pool_container_id
+                    container_ip = pool_container_ip
+                    session_id = pool_session_id
+                    vnc_password = pool_vnc_password
+                    claimed_from_pool = True
+                    logger.info(f"Claimed pool container {container_id} for {username}")
+                    break
+                else:
+                    logger.warning(f"Failed to claim session {pool_session_id}, trying next")
             else:
-                logger.warning(f"Failed to claim session {pool_session_id}, trying next")
-        else:
-            logger.warning(f"Failed to claim container {pool_container_id}, trying next")
+                logger.warning(f"Failed to claim container {pool_container_id}, trying next")
 
-    # If no pool container available, create a new one
-    if not container_id:
-        session_id = str(uuid.uuid4())[:SESSION_ID_LENGTH]
-        vnc_password = generate_vnc_password()
-        container_id, container_ip = spawn_vnc_container(session_id, username, vnc_password)
-        logger.info(f"Created new container {container_id} for {username} (no pool available)")
+        # If no pool container available, create a new one
+        if not container_id:
+            session_id = str(uuid.uuid4())[:SESSION_ID_LENGTH]
+            vnc_password = generate_vnc_password()
+            container_id, container_ip = spawn_vnc_container(session_id, username, vnc_password)
+            logger.info(f"Created new container {container_id} for {username} (no pool available)")
 
-    # At this point all values must be set
-    assert container_ip is not None
-    assert container_id is not None
-    assert vnc_password is not None
-    assert session_id is not None
+        # At this point all values must be set
+        assert container_ip is not None
+        assert container_id is not None
+        assert vnc_password is not None
+        assert session_id is not None
 
-    # Wait for VNC to be ready (pool containers should already be ready)
-    if not wait_for_vnc(container_ip, port=VNC_PORT, timeout=VNC_CONTAINER_TIMEOUT):
-        destroy_container(container_id)
-        raise RuntimeError(f"VNC server timeout for {username}")
+        # Wait for VNC to be ready (pool containers should already be ready)
+        if not wait_for_vnc(container_ip, port=VNC_PORT, timeout=VNC_CONTAINER_TIMEOUT):
+            destroy_container(container_id)
+            raise RuntimeError(f"VNC server timeout for {username}")
 
-    # Create connection with actual container IP
-    settings = BrokerConfig.settings()
-    connection_name = settings.containers.connection_name
-    conn_id = guac_api.create_connection(
-        name=connection_name,
-        hostname=container_ip,
-        port=VNC_PORT,
-        password=vnc_password,
-        username=username
-    )
-    guac_api.grant_connection_permission(username, conn_id)
+        # Create connection with actual container IP
+        settings = BrokerConfig.settings()
+        connection_name = settings.containers.connection_name
+        conn_id = guac_api.create_connection(
+            name=connection_name,
+            hostname=container_ip,
+            port=VNC_PORT,
+            password=vnc_password,
+            username=username
+        )
+        guac_api.grant_connection_permission(username, conn_id)
 
-    # Create placeholder connection to force home page display
-    force_home = settings.guacamole.force_home_page
-    if force_home:
-        guac_api.create_home_connection(username)
+        # Create placeholder connection to force home page display
+        force_home = settings.guacamole.force_home_page
+        if force_home:
+            guac_api.create_home_connection(username)
 
-    # Update session with guac connection ID
-    # For pool sessions, this updates the existing session
-    # For new sessions, this creates a new session
-    SessionStore.save_session(session_id, {
-        "session_id": session_id,
-        "username": username,
-        "guac_connection_id": conn_id,
-        "vnc_password": vnc_password,
-        "container_id": container_id,
-        "container_ip": container_ip,
-        "created_at": time.time() if not claimed_from_pool else None,  # Keep original for claimed
-        "started_at": time.time()
-    })
+        # Update session with guac connection ID
+        # For pool sessions, this updates the existing session
+        # For new sessions, this creates a new session
+        SessionStore.save_session(session_id, {
+            "session_id": session_id,
+            "username": username,
+            "guac_connection_id": conn_id,
+            "vnc_password": vnc_password,
+            "container_id": container_id,
+            "container_ip": container_ip,
+            "created_at": time.time() if not claimed_from_pool else None,  # Keep original for claimed
+            "started_at": time.time()
+        })
 
-    logger.info(f"Connection provisioned for {username}: {conn_id}")
-    return conn_id
+        logger.info(f"Connection provisioned for {username}: {conn_id}")
+        return conn_id
+    except Exception:
+        ERRORS_TOTAL.labels(endpoint="provision").inc()
+        raise
+    finally:
+        PROVISIONING_DURATION.observe(time.time() - start_time)
 
 
 def on_connection_start(connection_id: str, username: str) -> bool:

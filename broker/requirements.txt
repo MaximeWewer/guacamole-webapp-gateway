@@ -23,6 +23,11 @@ pydantic
 # Rate limiting
 flask-limiter
 
+# Observability
+prometheus-flask-exporter
+prometheus-client
+python-json-logger
+
 # Testing
 pytest
 pytest-mock

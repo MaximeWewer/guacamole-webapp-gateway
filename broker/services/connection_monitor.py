@@ -56,6 +56,11 @@ class ConnectionMonitor:
 
                 self.active_connections = current
 
+                # Update Prometheus gauges
+                from broker.observability import ACTIVE_CONNECTIONS, collect_business_metrics
+                ACTIVE_CONNECTIONS.set(len(current))
+                collect_business_metrics()
+
                 # Run cleanup every 60 iterations (~5 minutes with 5s interval)
                 self._cleanup_counter += 1
                 if self._cleanup_counter >= 60:

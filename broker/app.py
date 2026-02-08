@@ -23,10 +23,10 @@ from flask import Flask
 # Logging Setup
 # =============================================================================
 
-logging.basicConfig(
-    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from broker.observability import setup_json_logging
+
+_log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+setup_json_logging(level=_log_level)
 logger = logging.getLogger("session-broker")
 
 
@@ -58,6 +58,10 @@ app = Flask(__name__)
 # Initialize rate limiter
 from broker.api.rate_limit import init_limiter
 init_limiter(app)
+
+# Initialize Prometheus metrics (auto-instruments all routes, exposes /metrics)
+from broker.observability import init_metrics
+init_metrics(app)
 
 # =============================================================================
 # Import and Initialize Modules
@@ -149,6 +153,8 @@ def handle_not_found(e: Exception) -> tuple:
 @app.errorhandler(500)
 def handle_server_error(e: Exception) -> tuple:
     """Handle 500 errors."""
+    from broker.observability import ERRORS_TOTAL
+    ERRORS_TOTAL.labels(endpoint="app_500").inc()
     logger.error(f"Internal server error: {e}")
     return api_error("Internal server error", 500)
 

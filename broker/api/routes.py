@@ -375,5 +375,7 @@ def handle_not_found(e: Exception) -> RouteResponse:
 @api.errorhandler(500)
 def handle_server_error(e: Exception) -> RouteResponse:
     """Handle 500 errors."""
+    from broker.observability import ERRORS_TOTAL
+    ERRORS_TOTAL.labels(endpoint=request.endpoint or "unknown").inc()
     logger.error(f"Internal server error: {e}")
     return api_error("Internal server error", 500)

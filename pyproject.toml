@@ -22,5 +22,8 @@ module = [
     "flask_limiter.*",
     "yaml",
     "requests.*",
+    "prometheus_flask_exporter.*",
+    "prometheus_client.*",
+    "pythonjsonlogger.*",
 ]
 ignore_missing_imports = true

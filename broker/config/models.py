@@ -141,6 +141,7 @@ class LoggingConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     level: str = "INFO"
+    format: str = "json"
 
 
 class BrokerSettings(BaseModel):
