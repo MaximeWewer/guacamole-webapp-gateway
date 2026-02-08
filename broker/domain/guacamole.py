@@ -8,14 +8,7 @@ import time
 
 import requests
 
-from broker.config.settings import get_env
-
 logger = logging.getLogger("session-broker")
-
-# Guacamole configuration
-GUACAMOLE_URL = get_env("guacamole_url", "http://guacamole:8080/guacamole")
-GUAC_ADMIN_USER = get_env("guacamole_admin_user", "guacadmin")
-GUAC_ADMIN_PASSWORD = get_env("guacamole_admin_password", required=True)
 
 
 class GuacamoleAPI:
@@ -40,7 +33,7 @@ class GuacamoleAPI:
 
     def authenticate(self) -> str:
         """
-        Authenticate with Guacamole.
+        Authenticate with Guacamole.  Must be called under ``self._lock``.
 
         Returns:
             Authentication token
@@ -58,11 +51,17 @@ class GuacamoleAPI:
         self.data_source = list(data.get("availableDataSources", ["postgresql"]))[0]
         return self.token
 
-    def ensure_auth(self) -> None:
-        """Ensure valid authentication token exists."""
+    def _get_auth_params(self) -> tuple[str, str]:
+        """Return ``(token, data_source)`` in a thread-safe manner."""
         with self._lock:
             if not self.token or time.time() > self.token_expires:
                 self.authenticate()
+            assert self.token is not None
+            return self.token, self.data_source
+
+    def ensure_auth(self) -> None:
+        """Ensure valid authentication token exists."""
+        self._get_auth_params()
 
     def get_users(self) -> list:
         """
@@ -71,10 +70,10 @@ class GuacamoleAPI:
         Returns:
             List of usernames
         """
-        self.ensure_auth()
+        token, ds = self._get_auth_params()
         resp = requests.get(
-            f"{self.base_url}/api/session/data/{self.data_source}/users",
-            params={"token": self.token},
+            f"{self.base_url}/api/session/data/{ds}/users",
+            params={"token": token},
             timeout=10
         )
         resp.raise_for_status()
@@ -90,10 +89,10 @@ class GuacamoleAPI:
         Returns:
             List of group names
         """
-        self.ensure_auth()
+        token, ds = self._get_auth_params()
         resp = requests.get(
-            f"{self.base_url}/api/session/data/{self.data_source}/users/{username}/userGroups",
-            params={"token": self.token},
+            f"{self.base_url}/api/session/data/{ds}/users/{username}/userGroups",
+            params={"token": token},
             timeout=10
         )
         resp.raise_for_status()
@@ -106,10 +105,10 @@ class GuacamoleAPI:
         Returns:
             Dictionary of group data
         """
-        self.ensure_auth()
+        token, ds = self._get_auth_params()
         resp = requests.get(
-            f"{self.base_url}/api/session/data/{self.data_source}/userGroups",
-            params={"token": self.token},
+            f"{self.base_url}/api/session/data/{ds}/userGroups",
+            params={"token": token},
             timeout=10
         )
         resp.raise_for_status()
@@ -132,7 +131,7 @@ class GuacamoleAPI:
         from broker.config.loader import BrokerConfig
         from datetime import datetime
 
-        self.ensure_auth()
+        token, ds = self._get_auth_params()
 
         parameters = {
             "hostname": hostname,
@@ -167,8 +166,8 @@ class GuacamoleAPI:
             "attributes": {"max-connections": "1", "max-connections-per-user": "1"}
         }
         resp = requests.post(
-            f"{self.base_url}/api/session/data/{self.data_source}/connections",
-            params={"token": self.token},
+            f"{self.base_url}/api/session/data/{ds}/connections",
+            params={"token": token},
             json=connection_data,
             timeout=10
         )
@@ -185,11 +184,11 @@ class GuacamoleAPI:
             port: VNC port
             password: VNC password
         """
-        self.ensure_auth()
+        token, ds = self._get_auth_params()
         # Get connection details
         resp = requests.get(
-            f"{self.base_url}/api/session/data/{self.data_source}/connections/{conn_id}",
-            params={"token": self.token},
+            f"{self.base_url}/api/session/data/{ds}/connections/{conn_id}",
+            params={"token": token},
             timeout=10
         )
         resp.raise_for_status()
@@ -197,8 +196,8 @@ class GuacamoleAPI:
 
         # Get existing parameters separately
         params_resp = requests.get(
-            f"{self.base_url}/api/session/data/{self.data_source}/connections/{conn_id}/parameters",
-            params={"token": self.token},
+            f"{self.base_url}/api/session/data/{ds}/connections/{conn_id}/parameters",
+            params={"token": token},
             timeout=10
         )
         params_resp.raise_for_status()
@@ -213,8 +212,8 @@ class GuacamoleAPI:
         connection["parameters"] = parameters
 
         requests.put(
-            f"{self.base_url}/api/session/data/{self.data_source}/connections/{conn_id}",
-            params={"token": self.token},
+            f"{self.base_url}/api/session/data/{ds}/connections/{conn_id}",
+            params={"token": token},
             json=connection,
             timeout=10
         )
@@ -234,13 +233,13 @@ class GuacamoleAPI:
         from broker.config.loader import BrokerConfig
         from datetime import datetime
 
-        self.ensure_auth()
+        token, ds = self._get_auth_params()
 
         try:
             # Get current connection
             resp = requests.get(
-                f"{self.base_url}/api/session/data/{self.data_source}/connections/{conn_id}",
-                params={"token": self.token},
+                f"{self.base_url}/api/session/data/{ds}/connections/{conn_id}",
+                params={"token": token},
                 timeout=10
             )
             if resp.status_code != 200:
@@ -249,8 +248,8 @@ class GuacamoleAPI:
 
             # Get existing parameters
             params_resp = requests.get(
-                f"{self.base_url}/api/session/data/{self.data_source}/connections/{conn_id}/parameters",
-                params={"token": self.token},
+                f"{self.base_url}/api/session/data/{ds}/connections/{conn_id}/parameters",
+                params={"token": token},
                 timeout=10
             )
             params_resp.raise_for_status()
@@ -287,8 +286,8 @@ class GuacamoleAPI:
 
             # Update connection
             resp = requests.put(
-                f"{self.base_url}/api/session/data/{self.data_source}/connections/{conn_id}",
-                params={"token": self.token},
+                f"{self.base_url}/api/session/data/{ds}/connections/{conn_id}",
+                params={"token": token},
                 json=connection,
                 timeout=10
             )
@@ -307,10 +306,10 @@ class GuacamoleAPI:
         Args:
             conn_id: Connection identifier
         """
-        self.ensure_auth()
+        token, ds = self._get_auth_params()
         requests.delete(
-            f"{self.base_url}/api/session/data/{self.data_source}/connections/{conn_id}",
-            params={"token": self.token},
+            f"{self.base_url}/api/session/data/{ds}/connections/{conn_id}",
+            params={"token": token},
             timeout=10
         )
 
@@ -322,11 +321,11 @@ class GuacamoleAPI:
             username: Username
             conn_id: Connection identifier
         """
-        self.ensure_auth()
+        token, ds = self._get_auth_params()
         permissions = [{"op": "add", "path": f"/connectionPermissions/{conn_id}", "value": "READ"}]
         requests.patch(
-            f"{self.base_url}/api/session/data/{self.data_source}/users/{username}/permissions",
-            params={"token": self.token},
+            f"{self.base_url}/api/session/data/{ds}/users/{username}/permissions",
+            params={"token": token},
             json=permissions,
             timeout=10
         )
@@ -344,7 +343,7 @@ class GuacamoleAPI:
         """
         from broker.config.loader import BrokerConfig
 
-        self.ensure_auth()
+        token, ds = self._get_auth_params()
         home_name = BrokerConfig.settings().guacamole.home_connection_name
         conn_name = f"{home_name} - {username}"
 
@@ -374,8 +373,8 @@ class GuacamoleAPI:
         }
         try:
             resp = requests.post(
-                f"{self.base_url}/api/session/data/{self.data_source}/connections",
-                params={"token": self.token},
+                f"{self.base_url}/api/session/data/{ds}/connections",
+                params={"token": token},
                 json=connection_data,
                 timeout=10
             )
@@ -394,10 +393,10 @@ class GuacamoleAPI:
         Returns:
             Dictionary of connections {id: connection_data}
         """
-        self.ensure_auth()
+        token, ds = self._get_auth_params()
         resp = requests.get(
-            f"{self.base_url}/api/session/data/{self.data_source}/connections",
-            params={"token": self.token},
+            f"{self.base_url}/api/session/data/{ds}/connections",
+            params={"token": token},
             timeout=10
         )
         if resp.status_code == 200:
@@ -411,19 +410,11 @@ class GuacamoleAPI:
         Returns:
             Dictionary of active connections
         """
-        self.ensure_auth()
+        token, ds = self._get_auth_params()
         resp = requests.get(
-            f"{self.base_url}/api/session/data/{self.data_source}/activeConnections",
-            params={"token": self.token},
+            f"{self.base_url}/api/session/data/{ds}/activeConnections",
+            params={"token": token},
             timeout=10
         )
         resp.raise_for_status()
         return resp.json()
-
-
-# Global instance
-guac_api = GuacamoleAPI(
-    GUACAMOLE_URL or "http://guacamole:8080/guacamole",
-    GUAC_ADMIN_USER or "guacadmin",
-    GUAC_ADMIN_PASSWORD or "",
-)

@@ -78,10 +78,11 @@ def mock_db(mocker):
 
 @pytest.fixture
 def mock_guac_api(mocker):
-    """Patch the guac_api singleton in all consuming modules."""
+    """Return a mock GuacamoleAPI instance and inject it into the DI container."""
     mock_api = MagicMock()
     mock_api.authenticate.return_value = "fake-token"
     mock_api.ensure_auth.return_value = None
+    mock_api._get_auth_params.return_value = ("fake-token", "postgresql")
     mock_api.get_users.return_value = ["alice", "bob"]
     mock_api.get_user_groups.return_value = ["developers"]
     mock_api.get_all_user_groups.return_value = {"developers": {}, "admins": {}}
@@ -94,15 +95,40 @@ def mock_guac_api(mocker):
     mock_api.get_connections.return_value = {}
     mock_api.get_active_connections.return_value = {}
 
-    targets = [
-        "broker.domain.guacamole.guac_api",
-        "broker.services.provisioning.guac_api",
-        "broker.api.routes.guac_api",
-    ]
-    for target in targets:
-        mocker.patch(target, mock_api)
-
     return mock_api
+
+
+# ---------------------------------------------------------------------------
+# Service container mock
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def mock_services(mocker, mock_guac_api):
+    """Create and inject a ServiceContainer with pre-mocked services."""
+    from broker.container import ServiceContainer
+
+    container = ServiceContainer()
+    container._guac_api = mock_guac_api
+
+    # Mock user_sync and monitor as MagicMock instances
+    mock_user_sync = MagicMock()
+    mock_user_sync.start = MagicMock()
+    mock_user_sync.init_pool = MagicMock()
+    mock_user_sync.sync_users = MagicMock(return_value=["newuser"])
+    mock_user_sync.get_stats = MagicMock(return_value={
+        "last_sync": None, "total_synced": 0, "errors": 0,
+    })
+    container._user_sync = mock_user_sync
+
+    mock_monitor = MagicMock()
+    mock_monitor.start = MagicMock()
+    mock_monitor.active_connections = set()
+    container._monitor = mock_monitor
+
+    # Inject as global fallback
+    mocker.patch("broker.container._global_container", container)
+
+    return container
 
 
 # ---------------------------------------------------------------------------
@@ -210,43 +236,13 @@ def sample_session():
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def app_client(mocker, mock_db, mock_orchestrator, mock_guac_api, mock_broker_config):
+def app_client(mocker, mock_db, mock_orchestrator, mock_guac_api, mock_broker_config, mock_services):
     """Create a Flask test_client with all external deps mocked."""
-    import sys
-    # Get the actual module objects from sys.modules (the __init__.py
-    # re-exports the singletons, shadowing the submodule name).
-    _us_mod = sys.modules.get("broker.services.user_sync")
-    _cm_mod = sys.modules.get("broker.services.connection_monitor")
-
-    # If modules haven't been imported yet, import them properly
-    if _us_mod is None:
-        import importlib
-        _us_mod = importlib.import_module("broker.services.user_sync")
-    if _cm_mod is None:
-        import importlib
-        _cm_mod = importlib.import_module("broker.services.connection_monitor")
-
-    # The __init__.py shadows the submodule with the singleton instance,
-    # so resolve the actual instance from the real module.
-    _user_sync_instance = _us_mod if hasattr(_us_mod, "start") else _us_mod.user_sync
-    _monitor_instance = _cm_mod if hasattr(_cm_mod, "start") else _cm_mod.monitor
-
-    mocker.patch.object(_user_sync_instance, "start")
-    mocker.patch.object(_user_sync_instance, "init_pool")
-    mocker.patch.object(_user_sync_instance, "sync_users", return_value=["newuser"])
-    mocker.patch.object(_user_sync_instance, "get_stats", return_value={
-        "last_sync": None, "total_synced": 0, "errors": 0,
-    })
-    mocker.patch.object(_monitor_instance, "start")
     mocker.patch("broker.persistence.database.init_database")
 
     # Patch routes-level imports that access DB / orchestrator
     mocker.patch("broker.api.routes.destroy_container")
     mocker.patch("broker.api.routes.provision_user_connection", return_value="42")
-    mocker.patch("broker.api.routes.user_sync", MagicMock(
-        sync_users=MagicMock(return_value=["newuser"]),
-        get_stats=MagicMock(return_value={"last_sync": None, "total_synced": 0}),
-    ))
 
     # group_config mock
     mock_gc = MagicMock()
@@ -265,6 +261,8 @@ def app_client(mocker, mock_db, mock_orchestrator, mock_guac_api, mock_broker_co
 
     from broker.app import app
     app.config["TESTING"] = True
+    # Ensure container is in app.extensions
+    app.extensions["services"] = mock_services
     # Disable rate limiting for most tests
     app.config["RATELIMIT_ENABLED"] = False
 

@@ -5,15 +5,13 @@ from broker.services.provisioning import (
     on_connection_start,
     on_connection_end,
 )
-from broker.services.user_sync import UserSyncService, user_sync
-from broker.services.connection_monitor import ConnectionMonitor, monitor
+from broker.services.user_sync import UserSyncService
+from broker.services.connection_monitor import ConnectionMonitor
 
 __all__ = [
     "provision_user_connection",
     "on_connection_start",
     "on_connection_end",
     "UserSyncService",
-    "user_sync",
     "ConnectionMonitor",
-    "monitor",
 ]

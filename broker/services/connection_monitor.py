@@ -8,7 +8,6 @@ import time
 
 from broker.config.loader import BrokerConfig
 from broker.domain.session import SessionStore
-from broker.domain.guacamole import guac_api
 from broker.domain.container import destroy_container
 from broker.services.provisioning import on_connection_start, on_connection_end
 
@@ -26,45 +25,67 @@ class ConnectionMonitor:
             interval: Check interval in seconds
         """
         self.interval = interval
-        self.active_connections: set = set()
-        self.running = False
+        self._lock = threading.Lock()
+        self._active_connections: set = set()
+        self._running = False
         self._cleanup_counter = 0
+
+    @property
+    def active_connections(self) -> set:
+        """Return a snapshot copy of active connections (thread-safe)."""
+        with self._lock:
+            return self._active_connections.copy()
 
     def start(self) -> None:
         """Start the monitor service."""
-        self.running = True
+        with self._lock:
+            self._running = True
         threading.Thread(target=self._monitor_loop, daemon=True).start()
         logger.info("Connection monitor started")
 
     def _monitor_loop(self) -> None:
         """Main monitor loop."""
-        while self.running:
+        while True:
+            with self._lock:
+                if not self._running:
+                    break
+
             try:
+                from broker.container import get_services
+                guac_api = get_services().guac_api
+
                 active = guac_api.get_active_connections()
                 current = {c.get("connectionIdentifier") for c in active.values() if c.get("connectionIdentifier")}
 
+                with self._lock:
+                    previous = self._active_connections
+
                 # Handle new connections
-                for conn_id in current - self.active_connections:
+                for conn_id in current - previous:
                     info: dict[str, str] = next((c for c in active.values() if c.get("connectionIdentifier") == conn_id), {})
                     on_connection_start(conn_id, info.get("username", "unknown"))
 
                 # Handle ended connections
-                for conn_id in self.active_connections - current:
+                for conn_id in previous - current:
                     session = SessionStore.get_session_by_connection(conn_id)
                     if session:
                         on_connection_end(conn_id, session.username or "unknown")
-
-                self.active_connections = current
 
                 # Update Prometheus gauges
                 from broker.observability import ACTIVE_CONNECTIONS, collect_business_metrics
                 ACTIVE_CONNECTIONS.set(len(current))
                 collect_business_metrics()
 
+                # Atomically update state
+                with self._lock:
+                    self._active_connections = current
+                    self._cleanup_counter += 1
+                    should_cleanup = self._cleanup_counter >= 60
+                    if should_cleanup:
+                        self._cleanup_counter = 0
+
                 # Run cleanup every 60 iterations (~5 minutes with 5s interval)
-                self._cleanup_counter += 1
-                if self._cleanup_counter >= 60:
-                    self._cleanup_counter = 0
+                if should_cleanup:
                     self.cleanup_inactive_containers()
             except Exception as e:
                 logger.error(f"Monitor error: {e}")
@@ -79,6 +100,8 @@ class ConnectionMonitor:
         if timeout_minutes <= 0:
             return  # No timeout configured
 
+        active = self.active_connections  # thread-safe copy
+
         try:
             sessions = SessionStore.list_sessions()
             now = time.time()
@@ -92,7 +115,7 @@ class ConnectionMonitor:
                     continue
 
                 # Skip if container is currently in use
-                if session.guac_connection_id and session.guac_connection_id in self.active_connections:
+                if session.guac_connection_id and session.guac_connection_id in active:
                     continue
 
                 # Check inactivity timeout
@@ -129,6 +152,8 @@ class ConnectionMonitor:
         Returns:
             Number of containers killed
         """
+        active = self.active_connections  # thread-safe copy
+
         try:
             sessions = SessionStore.list_sessions()
             now = time.time()
@@ -141,7 +166,7 @@ class ConnectionMonitor:
                 if not session.container_id:
                     continue
 
-                if session.guac_connection_id and session.guac_connection_id in self.active_connections:
+                if session.guac_connection_id and session.guac_connection_id in active:
                     continue  # Skip active connections
 
                 last_activity = session.last_activity or session.started_at or now
@@ -166,7 +191,3 @@ class ConnectionMonitor:
         except Exception as e:
             logger.error(f"Force kill error: {e}")
             return 0
-
-
-# Global instance
-monitor = ConnectionMonitor(interval=5)

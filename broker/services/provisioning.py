@@ -9,7 +9,6 @@ import uuid
 from broker.config.settings import VNC_PORT, VNC_CONTAINER_TIMEOUT, SESSION_ID_LENGTH
 from broker.config.loader import BrokerConfig
 from broker.domain.session import SessionStore
-from broker.domain.guacamole import guac_api
 from broker.domain.user_profile import UserProfile
 from broker.domain.container import (
     spawn_vnc_container,
@@ -35,8 +34,10 @@ def provision_user_connection(username: str) -> str:
     Returns:
         Guacamole connection ID
     """
+    from broker.container import get_services
     from broker.observability import PROVISIONING_DURATION, ERRORS_TOTAL
     start_time = time.time()
+    guac_api = get_services().guac_api
 
     try:
         # Check for existing session with running container
@@ -158,6 +159,8 @@ def on_connection_start(connection_id: str, username: str) -> bool:
     Returns:
         True on success, False on failure
     """
+    from broker.container import get_services
+
     session = SessionStore.get_session_by_connection(connection_id)
     if not session:
         return False
@@ -187,6 +190,7 @@ def on_connection_start(connection_id: str, username: str) -> bool:
             raise RuntimeError("VNC server timeout")
 
         # Update Guacamole connection with container IP
+        guac_api = get_services().guac_api
         guac_api.update_connection(
             connection_id,
             container_ip,

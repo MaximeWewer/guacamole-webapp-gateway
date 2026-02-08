@@ -75,7 +75,7 @@ class UserProfile:
         Returns:
             Configuration dictionary with homepage, bookmarks, autofill, etc.
         """
-        from broker.domain.guacamole import guac_api
+        from broker.container import get_services
 
         config: dict[str, Any] = {
             "homepage": "about:blank",
@@ -84,7 +84,7 @@ class UserProfile:
         }
 
         try:
-            user_groups = guac_api.get_user_groups(username)
+            user_groups = get_services().guac_api.get_user_groups(username)
             yaml_config = ProfilesConfig.get_user_config(user_groups)
             config.update(yaml_config)
         except Exception as e:

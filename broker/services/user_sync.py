@@ -13,7 +13,6 @@ import uuid
 from broker.config.settings import VNC_PORT, VNC_CONTAINER_TIMEOUT
 from broker.config.loader import BrokerConfig
 from broker.domain.session import SessionStore
-from broker.domain.guacamole import guac_api
 from broker.domain.container import (
     spawn_vnc_container,
     destroy_container,
@@ -37,10 +36,20 @@ class UserSyncService:
             interval: Sync interval in seconds
         """
         self.interval = interval
-        self.running = False
+        self._running = False
         self.last_sync: float = 0
         self.sync_stats: dict[str, Any] = {"total_synced": 0, "last_new_users": [], "errors": 0}
         self._lock = threading.Lock()
+
+    @property
+    def running(self) -> bool:
+        with self._lock:
+            return self._running
+
+    @running.setter
+    def running(self, value: bool) -> None:
+        with self._lock:
+            self._running = value
 
     def start(self) -> None:
         """Start the sync service."""
@@ -150,8 +159,8 @@ class UserSyncService:
         Creates new pool containers when the pool shrinks below init_containers.
         Respects limits from broker.yml: max containers, batch size, and memory.
         """
-        # Import here to avoid circular imports
-        from broker.services.connection_monitor import monitor
+        from broker.container import get_services
+        monitor = get_services().monitor
 
         try:
             # Load config from broker.yml
@@ -324,6 +333,9 @@ class UserSyncService:
         Returns:
             List of newly provisioned usernames
         """
+        from broker.container import get_services
+        guac_api = get_services().guac_api
+
         ignored_users = set(BrokerConfig.settings().sync.ignored_users)
         guac_users = set(guac_api.get_users()) - ignored_users
         provisioned = SessionStore.get_provisioned_users()
@@ -355,7 +367,3 @@ class UserSyncService:
         """
         with self._lock:
             return {**self.sync_stats, "last_sync": self.last_sync, "interval": self.interval}
-
-
-# Global instance
-user_sync = UserSyncService(interval=BrokerConfig.settings().sync.interval)

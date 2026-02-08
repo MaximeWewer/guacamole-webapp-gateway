@@ -83,13 +83,16 @@ from broker.api.responses import api_error
 
 app.register_blueprint(api)
 
-# Import services (must be after database init)
-from broker.services.user_sync import user_sync
-from broker.services.connection_monitor import monitor
+# Initialize DI container (must be after database init)
+from broker.container import ServiceContainer
+import broker.container as container_mod
 from broker.domain.orchestrator import get_orchestrator
 from broker.config.loader import BrokerConfig
 from broker.domain.session import SessionStore
-from broker.domain.guacamole import guac_api
+
+container = ServiceContainer()
+app.extensions["services"] = container
+container_mod._global_container = container
 
 # =============================================================================
 # Startup Functions
@@ -121,6 +124,7 @@ def sync_existing_connections() -> None:
     sessions = SessionStore.list_sessions()
     synced = 0
 
+    guac_api = container.guac_api
     for session in sessions:
         if session is None:
             continue
@@ -166,11 +170,11 @@ def handle_server_error(e: Exception) -> tuple:
 # Start background services (works with both gunicorn and direct execution)
 cleanup_orphaned_containers()
 sync_existing_connections()
-user_sync.start()
+container.user_sync.start()
 
 # Initialize container pool at startup
-user_sync.init_pool()
-monitor.start()
+container.user_sync.init_pool()
+container.monitor.start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)

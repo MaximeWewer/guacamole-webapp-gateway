@@ -21,13 +21,12 @@ from broker.api.validators import (
 from broker.api.responses import api_success, api_error
 from broker.api.rate_limit import limiter, admin_limit
 from broker.api.audit import audit_log_response
+from broker.container import get_services
 from broker.domain.session import SessionStore
-from broker.domain.guacamole import guac_api
 from broker.domain.user_profile import UserProfile
 from broker.domain.container import destroy_container
 from broker.domain.group_config import group_config
 from broker.services.provisioning import provision_user_connection
-from broker.services.user_sync import user_sync
 
 logger = logging.getLogger("session-broker")
 
@@ -138,13 +137,14 @@ def force_cleanup(session_id: str) -> RouteResponse:
 @api.route("/api/sync", methods=["GET"])
 def get_sync_status() -> RouteResponse:
     """Get sync service status."""
-    return api_success(user_sync.get_stats())
+    return api_success(get_services().user_sync.get_stats())
 
 
 @api.route("/api/sync", methods=["POST"])
 @limiter.limit(lambda: admin_limit)
 def trigger_sync() -> RouteResponse:
     """Trigger manual user sync."""
+    user_sync = get_services().user_sync
     new_users = user_sync.sync_users()
     return api_success({"new_users": new_users, "stats": user_sync.get_stats()})
 
@@ -174,7 +174,7 @@ def refresh_user_config(username: str) -> RouteResponse:
     """Refresh user configuration from groups."""
     try:
         username = validate_username(username)
-        user_groups = guac_api.get_user_groups(username)
+        user_groups = get_services().guac_api.get_user_groups(username)
         config = UserProfile.apply_group_config(username, user_groups)
         return api_success(config, "Configuration refreshed")
     except ValidationError as e:
@@ -189,7 +189,7 @@ def get_user_groups_api(username: str) -> RouteResponse:
     """Get user's groups and effective configuration."""
     try:
         username = validate_username(username)
-        user_groups = guac_api.get_user_groups(username)
+        user_groups = get_services().guac_api.get_user_groups(username)
         config = group_config.get_user_config(user_groups)
         return api_success({
             "username": username,
@@ -350,7 +350,7 @@ def update_settings() -> RouteResponse:
 def list_guacamole_groups() -> RouteResponse:
     """List Guacamole user groups."""
     try:
-        return api_success({"groups": guac_api.get_all_user_groups()})
+        return api_success({"groups": get_services().guac_api.get_all_user_groups()})
     except Exception as e:
         logger.error(f"Error getting Guacamole groups: {e}")
         return api_error("Failed to get Guacamole groups", 500)

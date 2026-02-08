@@ -5,6 +5,7 @@ Factory for creating container orchestrators.
 from __future__ import annotations
 
 import logging
+import threading
 
 from typing import Any
 
@@ -14,6 +15,7 @@ from broker.domain.orchestrator.base import ContainerOrchestrator
 logger = logging.getLogger("session-broker")
 
 # Singleton instance
+_lock = threading.Lock()
 _orchestrator: Any = None
 
 
@@ -21,8 +23,8 @@ def get_orchestrator() -> ContainerOrchestrator:
     """
     Get the configured container orchestrator.
 
-    Uses singleton pattern to ensure only one orchestrator instance exists.
-    The backend is selected based on the 'orchestrator.backend' config value.
+    Uses double-checked locking to ensure only one orchestrator instance
+    exists even when accessed concurrently from multiple threads.
 
     Returns:
         ContainerOrchestrator instance (Docker or Kubernetes)
@@ -32,19 +34,23 @@ def get_orchestrator() -> ContainerOrchestrator:
     if _orchestrator is not None:
         return _orchestrator
 
-    backend = BrokerConfig.settings().orchestrator.backend
-    logger.info(f"Initializing {backend} orchestrator")
+    with _lock:
+        if _orchestrator is not None:
+            return _orchestrator
 
-    if backend == "kubernetes":
-        from broker.domain.orchestrator.kubernetes_orchestrator import (
-            KubernetesOrchestrator,
-        )
+        backend = BrokerConfig.settings().orchestrator.backend
+        logger.info(f"Initializing {backend} orchestrator")
 
-        _orchestrator = KubernetesOrchestrator()
-    else:
-        from broker.domain.orchestrator.docker_orchestrator import DockerOrchestrator
+        if backend == "kubernetes":
+            from broker.domain.orchestrator.kubernetes_orchestrator import (
+                KubernetesOrchestrator,
+            )
 
-        _orchestrator = DockerOrchestrator()
+            _orchestrator = KubernetesOrchestrator()
+        else:
+            from broker.domain.orchestrator.docker_orchestrator import DockerOrchestrator
+
+            _orchestrator = DockerOrchestrator()
 
     return _orchestrator
 
@@ -56,4 +62,5 @@ def reset_orchestrator() -> None:
     Useful for testing or configuration changes.
     """
     global _orchestrator
-    _orchestrator = None
+    with _lock:
+        _orchestrator = None

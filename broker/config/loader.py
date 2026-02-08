@@ -5,6 +5,7 @@ Configuration loaders for broker.yml and profiles.yml.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -24,6 +25,7 @@ BROKER_CONFIG_FILE = CONFIG_PATH / "broker.yml"
 class BrokerConfig:
     """Manages broker configuration from YAML file."""
 
+    _lock = threading.Lock()
     _config: dict = {}
     _typed_config: BrokerSettings | None = None
     _last_load: float = 0
@@ -36,6 +38,16 @@ class BrokerConfig:
         if cls._config and (now - cls._last_load) < cls._cache_duration:
             return cls._config
 
+        with cls._lock:
+            # Double-check after acquiring the lock
+            now = time.time()
+            if cls._config and (now - cls._last_load) < cls._cache_duration:
+                return cls._config
+            return cls._load_locked(now)
+
+    @classmethod
+    def _load_locked(cls, now: float) -> dict:
+        """Load config while holding ``_lock``. Called from :meth:`load`."""
         # Default configuration
         defaults = {
             "sync": {"interval": 60, "ignored_users": ["guacadmin"], "sync_config_on_restart": False},
@@ -192,6 +204,7 @@ class BrokerConfig:
 class ProfilesConfig:
     """Manages user profiles configuration from YAML file."""
 
+    _lock = threading.Lock()
     _config: dict = {}
     _last_load: float = 0
     _cache_duration: int = 60  # Reload every 60 seconds
@@ -203,20 +216,26 @@ class ProfilesConfig:
         if cls._config and (now - cls._last_load) < cls._cache_duration:
             return cls._config
 
-        if not PROFILES_CONFIG_FILE.exists():
-            logger.warning(f"Profiles config not found: {PROFILES_CONFIG_FILE}")
-            cls._config = {"default": {"description": "Default", "priority": 0, "bookmarks": []}}
-            return cls._config
+        with cls._lock:
+            # Double-check after acquiring the lock
+            now = time.time()
+            if cls._config and (now - cls._last_load) < cls._cache_duration:
+                return cls._config
 
-        try:
-            with open(PROFILES_CONFIG_FILE, "r") as f:
-                cls._config = yaml.safe_load(f) or {}
-            cls._last_load = now
-            logger.info(f"Loaded profiles from {PROFILES_CONFIG_FILE}: {len(cls._config)} profiles")
-        except Exception as e:
-            logger.error(f"Error loading profiles config: {e}")
-            if not cls._config:
+            if not PROFILES_CONFIG_FILE.exists():
+                logger.warning(f"Profiles config not found: {PROFILES_CONFIG_FILE}")
                 cls._config = {"default": {"description": "Default", "priority": 0, "bookmarks": []}}
+                return cls._config
+
+            try:
+                with open(PROFILES_CONFIG_FILE, "r") as f:
+                    cls._config = yaml.safe_load(f) or {}
+                cls._last_load = now
+                logger.info(f"Loaded profiles from {PROFILES_CONFIG_FILE}: {len(cls._config)} profiles")
+            except Exception as e:
+                logger.error(f"Error loading profiles config: {e}")
+                if not cls._config:
+                    cls._config = {"default": {"description": "Default", "priority": 0, "bookmarks": []}}
 
         return cls._config
 
@@ -271,7 +290,8 @@ class ProfilesConfig:
     @classmethod
     def reload(cls) -> None:
         """Force reload configuration."""
-        cls._last_load = 0
+        with cls._lock:
+            cls._last_load = 0
         cls.load()
 
 
