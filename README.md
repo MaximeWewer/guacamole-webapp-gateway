@@ -316,6 +316,84 @@ open http://localhost:5000/apidocs
 
 The **OpenAPI JSON spec** is served at `/apispec_1.json`.
 
+## Observability
+
+### Prometheus metrics
+
+The broker exposes a `/metrics` endpoint in Prometheus exposition format (exempt from rate limiting and authentication).
+
+```bash
+curl http://localhost:5000/metrics
+```
+
+#### Auto-instrumented (Flask)
+
+Provided by `prometheus-flask-exporter`, these metrics cover every HTTP route automatically:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `flask_http_request_duration_seconds` | Histogram | Request latency by method, path and status |
+| `flask_http_request_total` | Counter | Total requests by method, status |
+
+#### Business metrics
+
+Custom metrics updated periodically by the ConnectionMonitor:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `broker_active_containers` | Gauge | VNC containers currently running |
+| `broker_pool_containers` | Gauge | Pool containers available (unclaimed) |
+| `broker_active_connections` | Gauge | Active Guacamole connections |
+| `broker_provisioning_duration_seconds` | Histogram | User provisioning latency (buckets: 0.5s - 60s) |
+| `broker_errors_total` | Counter | Errors by endpoint label |
+
+#### Database pool
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `broker_db_pool_size` | Gauge | Total connections in the pool |
+| `broker_db_pool_used` | Gauge | Connections currently checked out |
+
+#### Circuit breaker
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `broker_circuit_breaker_state` | Gauge | State per circuit: 0=closed, 1=open, 2=half-open |
+| `broker_circuit_breaker_trips_total` | Counter | Times the circuit tripped to OPEN |
+
+#### Prometheus scrape config example
+
+```yaml
+scrape_configs:
+  - job_name: guacamole-webapp-gateway
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names: [guacamole]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name]
+        regex: gateway-guacamole-webapp-gateway
+        action: keep
+```
+
+Or with a `PodMonitor` / `ServiceMonitor` (Prometheus Operator):
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: guacamole-webapp-gateway
+  namespace: guacamole
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: guacamole-webapp-gateway
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+```
+
 ## VNC container images
 
 This project uses [docker-browser-vnc](https://github.com/MaximeWewer/docker-browser-vnc):
