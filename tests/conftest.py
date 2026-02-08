@@ -24,6 +24,10 @@ os.environ.setdefault("BROKER_API_KEY", "test-api-key-secret")
 os.environ.setdefault("USER_DATA_PATH", "/tmp/broker-tests/users")
 os.environ.setdefault("CONFIG_PATH", "/tmp/broker-tests/config")
 
+# Import broker modules AFTER env vars are set (they trigger module-level code)
+from broker.config.models import BrokerSettings  # noqa: E402
+from broker.domain.types import SessionData  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Database mock
@@ -156,7 +160,7 @@ _DEFAULT_CONFIG = {
 
 @pytest.fixture
 def mock_broker_config(mocker):
-    """Patch BrokerConfig.get to return sensible defaults."""
+    """Patch BrokerConfig.get and BrokerConfig.settings to return sensible defaults."""
 
     def _get(*keys, default=None):
         node = _DEFAULT_CONFIG
@@ -167,8 +171,11 @@ def mock_broker_config(mocker):
                 return default
         return node
 
+    _typed_settings = BrokerSettings(**_DEFAULT_CONFIG)
+
     mocker.patch("broker.config.loader.BrokerConfig.get", side_effect=_get)
     mocker.patch("broker.config.loader.BrokerConfig.load", return_value=_DEFAULT_CONFIG)
+    mocker.patch("broker.config.loader.BrokerConfig.settings", return_value=_typed_settings)
     mocker.patch("broker.config.loader.BrokerConfig.get_browser_type", return_value="firefox")
     return _get
 
@@ -179,10 +186,10 @@ def mock_broker_config(mocker):
 
 @pytest.fixture
 def sample_session():
-    """Factory for a realistic session dict."""
-    def _make(**overrides):
+    """Factory for a realistic SessionData instance."""
+    def _make(**overrides) -> SessionData:
         now = time.time()
-        base = {
+        defaults = {
             "session_id": "abcd1234",
             "username": "alice",
             "container_id": "cnt-abc123",
@@ -193,8 +200,8 @@ def sample_session():
             "started_at": now - 300,
             "last_activity": now - 10,
         }
-        base.update(overrides)
-        return base
+        defaults.update(overrides)
+        return SessionData(**defaults)
     return _make
 
 

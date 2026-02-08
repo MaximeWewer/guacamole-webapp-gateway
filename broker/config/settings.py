@@ -25,7 +25,7 @@ MAX_GROUP_NAME_LENGTH = 255
 URL_PATTERN = re.compile(r'^https?://')
 
 
-def get_env(key: str, default: str = None, required: bool = False) -> str:
+def get_env(key: str, default: str | None = None, required: bool = False) -> str | None:
     """
     Retrieve an environment variable with Vault support.
 

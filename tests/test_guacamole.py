@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch, PropertyMock
 import pytest
 import requests
 
+from broker.config.models import BrokerSettings
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -114,15 +116,14 @@ class TestCreateConnection:
         api.token_expires = time.time() + 3000
 
         # Override BrokerConfig to enable recording
-        mocker.patch("broker.config.loader.BrokerConfig.get", side_effect=lambda *keys, default=None: {
-            ("guacamole", "recording"): {
-                "enabled": True,
-                "path": "/recordings",
-                "name": "${GUAC_USERNAME}-session",
-                "include_keys": False,
-                "auto_create_path": True,
-            },
-        }.get(keys, default))
+        custom_settings = BrokerSettings(guacamole={"recording": {
+            "enabled": True,
+            "path": "/recordings",
+            "name": "${GUAC_USERNAME}-session",
+            "include_keys": False,
+            "auto_create_path": True,
+        }})
+        mocker.patch("broker.config.loader.BrokerConfig.settings", return_value=custom_settings)
 
         mock_post = mocker.patch("broker.domain.guacamole.requests.post", return_value=_mock_response(
             json_data={"identifier": "101"}
@@ -179,10 +180,11 @@ class TestSyncConnectionConfig:
         api.token = "tok"
         api.token_expires = time.time() + 3000
 
-        mocker.patch("broker.config.loader.BrokerConfig.get", side_effect=lambda *keys, default=None: {
-            ("containers", "connection_name"): "My Desktop",
-            ("guacamole", "recording"): {"enabled": True, "path": "/rec", "name": "", "include_keys": False, "auto_create_path": True},
-        }.get(keys, default))
+        custom_settings = BrokerSettings(
+            containers={"connection_name": "My Desktop"},
+            guacamole={"recording": {"enabled": True, "path": "/rec", "name": "", "include_keys": False, "auto_create_path": True}},
+        )
+        mocker.patch("broker.config.loader.BrokerConfig.settings", return_value=custom_settings)
 
         existing_conn = {"name": "Old Name", "protocol": "vnc"}
         existing_params = {"hostname": "10.0.0.1", "port": "5901"}

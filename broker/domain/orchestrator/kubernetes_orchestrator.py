@@ -2,6 +2,8 @@
 Kubernetes implementation of container orchestration.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 from typing import Any
@@ -27,7 +29,7 @@ except ImportError:
 class KubernetesOrchestrator:
     """Kubernetes-based container orchestrator."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize Kubernetes client."""
         if not KUBERNETES_AVAILABLE:
             raise RuntimeError(
@@ -47,8 +49,8 @@ class KubernetesOrchestrator:
                 raise RuntimeError(f"Could not load Kubernetes config: {e}")
 
         self._core_api = client.CoreV1Api()
-        self._k8s_config = BrokerConfig.get("orchestrator", "kubernetes", default={})
-        self._namespace = self._k8s_config.get("namespace", "guacamole")
+        self._k8s_settings = BrokerConfig.settings().orchestrator.kubernetes
+        self._namespace = self._k8s_settings.namespace
 
     def _get_pod_spec(
         self, session_id: str, username: str | None, vnc_password: str
@@ -64,8 +66,8 @@ class KubernetesOrchestrator:
         Returns:
             Pod specification dict
         """
-        container_config = BrokerConfig.get("containers", default={})
-        vnc_image = container_config.get("image", "vnc-browser:latest")
+        containers_cfg = BrokerConfig.settings().containers
+        vnc_image = containers_cfg.image
 
         # For pool containers (no username), use default config
         homepage = "about:blank"
@@ -88,13 +90,12 @@ class KubernetesOrchestrator:
             )
 
         # Get Kubernetes-specific config
-        k8s_labels = self._k8s_config.get("labels", {})
-        image_pull_policy = self._k8s_config.get("image_pull_policy", "IfNotPresent")
-        image_pull_secrets = self._k8s_config.get("image_pull_secrets", [])
-        node_selector = self._k8s_config.get("node_selector", {})
-        tolerations = self._k8s_config.get("tolerations", [])
-        resources = self._k8s_config.get("resources", {})
-        security_context = self._k8s_config.get("security_context", {})
+        k8s = self._k8s_settings
+        k8s_labels = dict(k8s.labels)
+        image_pull_policy = k8s.image_pull_policy
+        image_pull_secrets = list(k8s.image_pull_secrets)
+        node_selector = dict(k8s.node_selector)
+        tolerations = [dict(t) for t in k8s.tolerations]
 
         # Build labels
         labels = {
@@ -116,7 +117,7 @@ class KubernetesOrchestrator:
         if username:
             env_vars.append({"name": "GUAC_USERNAME", "value": username})
 
-        container_spec = {
+        container_spec: dict[str, Any] = {
             "name": "vnc",
             "image": vnc_image,
             "imagePullPolicy": image_pull_policy,
@@ -124,28 +125,20 @@ class KubernetesOrchestrator:
             "ports": [{"containerPort": 5900, "name": "vnc", "protocol": "TCP"}],
         }
 
-        # Add resources if specified
-        if resources:
-            container_spec["resources"] = {}
-            if "requests" in resources:
-                container_spec["resources"]["requests"] = resources["requests"]
-            if "limits" in resources:
-                container_spec["resources"]["limits"] = resources["limits"]
+        # Add resources
+        container_spec["resources"] = {
+            "requests": {"memory": k8s.resources.requests.memory, "cpu": k8s.resources.requests.cpu},
+            "limits": {"memory": k8s.resources.limits.memory, "cpu": k8s.resources.limits.cpu},
+        }
 
-        # Add security context to container if specified
-        if security_context:
-            container_spec["securityContext"] = {}
-            if "run_as_non_root" in security_context:
-                container_spec["securityContext"]["runAsNonRoot"] = security_context[
-                    "run_as_non_root"
-                ]
-            if "run_as_user" in security_context:
-                container_spec["securityContext"]["runAsUser"] = security_context[
-                    "run_as_user"
-                ]
+        # Add security context
+        container_spec["securityContext"] = {
+            "runAsNonRoot": k8s.security_context.run_as_non_root,
+            "runAsUser": k8s.security_context.run_as_user,
+        }
 
         # Build pod spec
-        pod_spec = {
+        pod_spec: dict[str, Any] = {
             "containers": [container_spec],
             "restartPolicy": "Never",
         }
@@ -162,7 +155,7 @@ class KubernetesOrchestrator:
                 {"name": secret} for secret in image_pull_secrets
             ]
 
-        service_account = self._k8s_config.get("service_account")
+        service_account = k8s.service_account
         if service_account:
             pod_spec["serviceAccountName"] = service_account
 
@@ -198,7 +191,7 @@ class KubernetesOrchestrator:
                     name=pod_name, namespace=self._namespace
                 )
                 if pod.status.pod_ip:
-                    return pod.status.pod_ip
+                    return str(pod.status.pod_ip)
             except ApiException as e:
                 logger.warning(f"Error reading pod {pod_name}: {e}")
             time.sleep(1)
@@ -273,7 +266,7 @@ class KubernetesOrchestrator:
             pod = self._core_api.read_namespaced_pod(
                 name=container_id, namespace=self._namespace
             )
-            return pod.status.phase == "Running"
+            return bool(pod.status.phase == "Running")
         except ApiException as e:
             if e.status == 404:
                 return False
@@ -341,12 +334,10 @@ class KubernetesOrchestrator:
             )
 
             total_bytes = 0
-            resources = self._k8s_config.get("resources", {})
-            limits = resources.get("limits", {})
-            requests = resources.get("requests", {})
+            k8s_res = self._k8s_settings.resources
 
-            # Use limits if available, otherwise requests, otherwise estimate
-            memory_str = limits.get("memory") or requests.get("memory") or "1Gi"
+            # Use limits if available, otherwise requests
+            memory_str = k8s_res.limits.memory or k8s_res.requests.memory or "1Gi"
 
             # Parse memory string (e.g., "512Mi", "2Gi")
             memory_bytes = self._parse_memory(memory_str)

@@ -2,12 +2,14 @@
 API response helpers for standardized responses.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from flask import jsonify, Response
 
 
-def api_success(data: Any = None, message: str = None, status_code: int = 200) -> tuple[Response, int]:
+def api_success(data: Any = None, message: str | None = None, status_code: int = 200) -> tuple[Response, int]:
     """
     Create a standardized success API response.
 
@@ -19,7 +21,7 @@ def api_success(data: Any = None, message: str = None, status_code: int = 200) -
     Returns:
         Tuple of (response, status_code)
     """
-    response = {"success": True}
+    response: dict[str, Any] = {"success": True}
     if data is not None:
         response["data"] = data
     if message:

@@ -110,7 +110,7 @@ def sync_existing_connections() -> None:
     Synchronize existing Guacamole connections with current broker config.
     Updates recording settings, connection names, etc.
     """
-    if not BrokerConfig.get("sync", "sync_config_on_restart", default=False):
+    if not BrokerConfig.settings().sync.sync_config_on_restart:
         return
 
     logger.info("Syncing existing connections with current config...")
@@ -118,8 +118,10 @@ def sync_existing_connections() -> None:
     synced = 0
 
     for session in sessions:
-        conn_id = session.get("guac_connection_id")
-        username = session.get("username", "")
+        if session is None:
+            continue
+        conn_id = session.guac_connection_id
+        username = session.username or ""
         if conn_id:
             if guac_api.sync_connection_config(conn_id, username):
                 synced += 1
@@ -133,19 +135,19 @@ def sync_existing_connections() -> None:
 # =============================================================================
 
 @app.errorhandler(ValidationError)
-def handle_validation_error(e):
+def handle_validation_error(e: ValidationError) -> tuple:
     """Handle validation errors."""
     return api_error(str(e), 400)
 
 
 @app.errorhandler(404)
-def handle_not_found(e):
+def handle_not_found(e: Exception) -> tuple:
     """Handle 404 errors."""
     return api_error("Resource not found", 404)
 
 
 @app.errorhandler(500)
-def handle_server_error(e):
+def handle_server_error(e: Exception) -> tuple:
     """Handle 500 errors."""
     logger.error(f"Internal server error: {e}")
     return api_error("Internal server error", 500)

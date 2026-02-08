@@ -7,7 +7,9 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
+from broker.config.models import BrokerSettings
 from broker.domain.orchestrator.base import ContainerInfo
+from broker.domain.types import SessionData
 
 
 # ---------------------------------------------------------------------------
@@ -44,12 +46,12 @@ class TestProvisionUserConnection:
         self, mocker, mock_db, mock_guac_api, mock_orchestrator, mock_broker_config
     ):
         """Pool session available → claim container + claim_pool_session → no spawn."""
-        pool_session = {
-            "session_id": "pool-1",
-            "container_id": "cnt-pool",
-            "container_ip": "172.18.0.20",
-            "vnc_password": "pool-pw",
-        }
+        pool_session = SessionData(
+            session_id="pool-1",
+            container_id="cnt-pool",
+            container_ip="172.18.0.20",
+            vnc_password="pool-pw",
+        )
         mocker.patch("broker.services.provisioning.SessionStore.get_session_by_username", return_value=None)
         mocker.patch("broker.services.provisioning.SessionStore.get_pool_sessions", return_value=[pool_session])
         mocker.patch("broker.services.provisioning.SessionStore.claim_pool_session", return_value=True)
@@ -71,8 +73,8 @@ class TestProvisionUserConnection:
         self, mocker, mock_db, mock_guac_api, mock_orchestrator, mock_broker_config
     ):
         """First claim fails → retry on next pool session."""
-        pool1 = {"session_id": "p1", "container_id": "c1", "container_ip": "10.0.0.1", "vnc_password": "pw1"}
-        pool2 = {"session_id": "p2", "container_id": "c2", "container_ip": "10.0.0.2", "vnc_password": "pw2"}
+        pool1 = SessionData(session_id="p1", container_id="c1", container_ip="10.0.0.1", vnc_password="pw1")
+        pool2 = SessionData(session_id="p2", container_id="c2", container_ip="10.0.0.2", vnc_password="pw2")
 
         mocker.patch("broker.services.provisioning.SessionStore.get_session_by_username", return_value=None)
         mocker.patch("broker.services.provisioning.SessionStore.get_pool_sessions", return_value=[pool1, pool2])
@@ -113,13 +115,13 @@ class TestProvisionUserConnection:
         self, mocker, mock_db, mock_guac_api, mock_orchestrator, mock_broker_config
     ):
         """Existing session with running container → return conn_id directly."""
-        existing = {
-            "session_id": "s1",
-            "username": "alice",
-            "guac_connection_id": "42",
-            "container_id": "cnt-1",
-            "container_ip": "10.0.0.1",
-        }
+        existing = SessionData(
+            session_id="s1",
+            username="alice",
+            guac_connection_id="42",
+            container_id="cnt-1",
+            container_ip="10.0.0.1",
+        )
         mocker.patch("broker.services.provisioning.SessionStore.get_session_by_username", return_value=existing)
 
         from broker.services.provisioning import provision_user_connection
@@ -161,11 +163,11 @@ class TestOnConnectionStart:
         self, mocker, mock_db, mock_guac_api, mock_orchestrator, mock_broker_config
     ):
         """Container running → no spawn, return True."""
-        session = {
-            "session_id": "s1", "username": "alice",
-            "container_id": "cnt-1", "container_ip": "10.0.0.1",
-            "vnc_password": "pw", "guac_connection_id": "42",
-        }
+        session = SessionData(
+            session_id="s1", username="alice",
+            container_id="cnt-1", container_ip="10.0.0.1",
+            vnc_password="pw", guac_connection_id="42",
+        )
         mocker.patch("broker.services.provisioning.SessionStore.get_session_by_connection", return_value=session)
         mocker.patch("broker.services.provisioning.is_container_running", return_value=True)
 
@@ -177,11 +179,11 @@ class TestOnConnectionStart:
         self, mocker, mock_db, mock_guac_api, mock_orchestrator, mock_broker_config
     ):
         """No container → spawn + update_connection."""
-        session = {
-            "session_id": "s1", "username": "alice",
-            "container_id": None, "container_ip": None,
-            "vnc_password": "pw", "guac_connection_id": "42",
-        }
+        session = SessionData(
+            session_id="s1", username="alice",
+            container_id=None, container_ip=None,
+            vnc_password="pw", guac_connection_id="42",
+        )
         mocker.patch("broker.services.provisioning.SessionStore.get_session_by_connection", return_value=session)
         mocker.patch("broker.services.provisioning.spawn_vnc_container", return_value=("cnt-new", "10.0.0.5"))
         mocker.patch("broker.services.provisioning.wait_for_vnc", return_value=True)
@@ -196,11 +198,11 @@ class TestOnConnectionStart:
         self, mocker, mock_db, mock_guac_api, mock_orchestrator, mock_broker_config
     ):
         """Spawn OK but VNC timeout → destroy → return False."""
-        session = {
-            "session_id": "s1", "username": "alice",
-            "container_id": None, "container_ip": None,
-            "vnc_password": "pw", "guac_connection_id": "42",
-        }
+        session = SessionData(
+            session_id="s1", username="alice",
+            container_id=None, container_ip=None,
+            vnc_password="pw", guac_connection_id="42",
+        )
         mocker.patch("broker.services.provisioning.SessionStore.get_session_by_connection", return_value=session)
         mocker.patch("broker.services.provisioning.spawn_vnc_container", return_value=("cnt-fail", "10.0.0.5"))
         mocker.patch("broker.services.provisioning.wait_for_vnc", return_value=False)
@@ -222,11 +224,11 @@ class TestOnConnectionEnd:
         self, mocker, mock_db, mock_guac_api, mock_orchestrator, mock_broker_config
     ):
         """persist=True → no destroy, update last_activity."""
-        session = {
-            "session_id": "s1", "username": "alice",
-            "container_id": "cnt-1", "container_ip": "10.0.0.1",
-            "vnc_password": "pw", "guac_connection_id": "42",
-        }
+        session = SessionData(
+            session_id="s1", username="alice",
+            container_id="cnt-1", container_ip="10.0.0.1",
+            vnc_password="pw", guac_connection_id="42",
+        )
         mocker.patch("broker.services.provisioning.SessionStore.get_session_by_connection", return_value=session)
         save_mock = mocker.patch("broker.services.provisioning.SessionStore.save_session")
         destroy_mock = mocker.patch("broker.services.provisioning.destroy_container")
@@ -239,28 +241,26 @@ class TestOnConnectionEnd:
         destroy_mock.assert_not_called()
         save_mock.assert_called_once()
         saved_data = save_mock.call_args[0][1]
-        assert "last_activity" in saved_data
-        assert saved_data["last_activity"] is not None
+        assert saved_data.last_activity is not None
 
     def test_on_connection_end_destroy_mode(
         self, mocker, mock_db, mock_guac_api, mock_orchestrator, mock_broker_config
     ):
         """persist=False → destroy container, clear container_id."""
-        session = {
-            "session_id": "s1", "username": "alice",
-            "container_id": "cnt-1", "container_ip": "10.0.0.1",
-            "vnc_password": "pw", "guac_connection_id": "42",
-        }
+        session = SessionData(
+            session_id="s1", username="alice",
+            container_id="cnt-1", container_ip="10.0.0.1",
+            vnc_password="pw", guac_connection_id="42",
+        )
         mocker.patch("broker.services.provisioning.SessionStore.get_session_by_connection", return_value=session)
         save_mock = mocker.patch("broker.services.provisioning.SessionStore.save_session")
         destroy_mock = mocker.patch("broker.services.provisioning.destroy_container")
 
-        # Override persist config
+        # Override persist config via settings()
+        custom_settings = BrokerSettings(lifecycle={"persist_after_disconnect": False})
         mocker.patch(
-            "broker.services.provisioning.BrokerConfig.get",
-            side_effect=lambda *keys, default=None: False
-            if keys == ("lifecycle", "persist_after_disconnect")
-            else mock_broker_config(*keys, default=default),
+            "broker.services.provisioning.BrokerConfig.settings",
+            return_value=custom_settings,
         )
 
         from broker.services.provisioning import on_connection_end
@@ -269,7 +269,7 @@ class TestOnConnectionEnd:
 
         destroy_mock.assert_called_once_with("cnt-1")
         saved_data = save_mock.call_args[0][1]
-        assert saved_data["container_id"] is None
+        assert saved_data.container_id is None
 
     def test_on_connection_end_no_session(
         self, mocker, mock_db, mock_guac_api, mock_orchestrator, mock_broker_config

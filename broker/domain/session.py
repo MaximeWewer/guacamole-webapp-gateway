@@ -2,8 +2,13 @@
 Session management for the Session Broker.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 from psycopg2.extras import RealDictCursor
 
+from broker.domain.types import SessionData
 from broker.persistence.database import get_db_connection
 
 
@@ -11,14 +16,15 @@ class SessionStore:
     """Manages session data in PostgreSQL."""
 
     @staticmethod
-    def save_session(session_id: str, data: dict) -> None:
+    def save_session(session_id: str, data: SessionData | dict[str, Any]) -> None:
         """
         Save or update a session.
 
         Args:
             session_id: Session identifier
-            data: Session data dictionary
+            data: Session data (SessionData or dict)
         """
+        d = data.to_dict() if isinstance(data, SessionData) else data
         with get_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -36,35 +42,35 @@ class SessionStore:
                         updated_at = CURRENT_TIMESTAMP
                 """, (
                     session_id,
-                    data.get("username"),
-                    data.get("guac_connection_id"),
-                    data.get("vnc_password"),
-                    data.get("container_id"),
-                    data.get("container_ip"),
-                    data.get("created_at"),
-                    data.get("started_at"),
-                    data.get("last_activity")
+                    d.get("username"),
+                    d.get("guac_connection_id"),
+                    d.get("vnc_password"),
+                    d.get("container_id"),
+                    d.get("container_ip"),
+                    d.get("created_at"),
+                    d.get("started_at"),
+                    d.get("last_activity")
                 ))
 
     @staticmethod
-    def _row_to_dict(row: dict) -> dict | None:
-        """Convert database row to session dictionary."""
+    def _row_to_dict(row: dict[str, Any] | None) -> SessionData | None:
+        """Convert database row to SessionData."""
         if not row:
             return None
-        return {
-            "session_id": row["session_id"],
-            "username": row["username"],
-            "guac_connection_id": row["guac_connection_id"],
-            "vnc_password": row["vnc_password"],
-            "container_id": row["container_id"],
-            "container_ip": row["container_ip"],
-            "created_at": row["created_at"].timestamp() if row["created_at"] else None,
-            "started_at": row["started_at"].timestamp() if row["started_at"] else None,
-            "last_activity": row["last_activity"].timestamp() if row.get("last_activity") else None
-        }
+        return SessionData(
+            session_id=row["session_id"],
+            username=row["username"],
+            guac_connection_id=row["guac_connection_id"],
+            vnc_password=row["vnc_password"],
+            container_id=row["container_id"],
+            container_ip=row["container_ip"],
+            created_at=row["created_at"].timestamp() if row["created_at"] else None,
+            started_at=row["started_at"].timestamp() if row["started_at"] else None,
+            last_activity=row["last_activity"].timestamp() if row.get("last_activity") else None,
+        )
 
     @staticmethod
-    def get_session(session_id: str) -> dict | None:
+    def get_session(session_id: str) -> SessionData | None:
         """
         Get session by ID.
 
@@ -92,7 +98,7 @@ class SessionStore:
                 cur.execute("DELETE FROM broker_sessions WHERE session_id = %s", (session_id,))
 
     @staticmethod
-    def get_session_by_connection(connection_id: str) -> dict | None:
+    def get_session_by_connection(connection_id: str) -> SessionData | None:
         """
         Get session by Guacamole connection ID.
 
@@ -108,7 +114,7 @@ class SessionStore:
                 return SessionStore._row_to_dict(cur.fetchone())
 
     @staticmethod
-    def get_session_by_username(username: str) -> dict | None:
+    def get_session_by_username(username: str) -> SessionData | None:
         """
         Get session by username.
 
@@ -124,7 +130,7 @@ class SessionStore:
                 return SessionStore._row_to_dict(cur.fetchone())
 
     @staticmethod
-    def list_sessions() -> list:
+    def list_sessions() -> list[SessionData | None]:
         """
         List all sessions.
 
@@ -150,13 +156,13 @@ class SessionStore:
                 return {row[0] for row in cur.fetchall()}
 
     @staticmethod
-    def get_sessions_needing_containers() -> list:
+    def get_sessions_needing_containers() -> list[SessionData]:
         """
         Get sessions that need a container (no container_id or container not running).
         Used for pre-warming containers.
 
         Returns:
-            List of session dictionaries needing containers
+            List of SessionData needing containers
         """
         # Import here to avoid circular imports
         from broker.domain.container import is_container_running
@@ -171,26 +177,27 @@ class SessionStore:
                 sessions = [SessionStore._row_to_dict(row) for row in cur.fetchall()]
 
         # Filter to sessions without running containers
-        result = []
+        result: list[SessionData] = []
         for session in sessions:
-            container_id = session.get("container_id")
-            if not container_id:
+            if session is None:
+                continue
+            if not session.container_id:
                 result.append(session)
-            elif not is_container_running(container_id):
+            elif not is_container_running(session.container_id):
                 # Container was removed, clear the stale ID
-                session["container_id"] = None
-                session["container_ip"] = None
+                session.container_id = None
+                session.container_ip = None
                 result.append(session)
         return result
 
     @staticmethod
-    def get_pool_sessions() -> list:
+    def get_pool_sessions() -> list[SessionData]:
         """
         Get pool sessions (sessions without username, with running container).
         These are pre-warmed containers ready to be claimed.
 
         Returns:
-            List of pool session dictionaries
+            List of pool SessionData
         """
         # Import here to avoid circular imports
         from broker.domain.container import is_container_running
@@ -206,10 +213,11 @@ class SessionStore:
                 sessions = [SessionStore._row_to_dict(row) for row in cur.fetchall()]
 
         # Filter to sessions with running containers
-        result = []
+        result: list[SessionData] = []
         for session in sessions:
-            container_id = session.get("container_id")
-            if container_id and is_container_running(container_id):
+            if session is None:
+                continue
+            if session.container_id and is_container_running(session.container_id):
                 result.append(session)
         return result
 
@@ -232,4 +240,4 @@ class SessionStore:
                     SET username = %s, updated_at = CURRENT_TIMESTAMP
                     WHERE session_id = %s AND username IS NULL
                 """, (username, session_id))
-                return cur.rowcount > 0
+                return bool(cur.rowcount > 0)

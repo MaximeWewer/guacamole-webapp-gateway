@@ -16,7 +16,7 @@ class GroupConfig:
     """Manages group configuration stored in PostgreSQL."""
 
     @staticmethod
-    def get_setting(key: str, default: str = None) -> str:
+    def get_setting(key: str, default: str | None = None) -> str | None:
         """
         Get a broker setting.
 

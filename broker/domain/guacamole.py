@@ -144,14 +144,14 @@ class GuacamoleAPI:
         }
 
         # Add recording parameters if enabled
-        recording_config = BrokerConfig.get("guacamole", "recording", default={})
-        if recording_config.get("enabled", False):
-            parameters["recording-path"] = recording_config.get("path", "/recordings")
-            parameters["recording-include-keys"] = "true" if recording_config.get("include_keys", False) else "false"
-            parameters["create-recording-path"] = "true" if recording_config.get("auto_create_path", True) else "false"
+        recording = BrokerConfig.settings().guacamole.recording
+        if recording.enabled:
+            parameters["recording-path"] = recording.path
+            parameters["recording-include-keys"] = "true" if recording.include_keys else "false"
+            parameters["create-recording-path"] = "true" if recording.auto_create_path else "false"
 
             # Only set recording-name if not empty
-            recording_name = recording_config.get("name", "")
+            recording_name = recording.name
             if recording_name:
                 now = datetime.now()
                 recording_name = recording_name.replace("${GUAC_USERNAME}", username or "unknown")
@@ -257,18 +257,18 @@ class GuacamoleAPI:
             parameters = params_resp.json()
 
             # Update connection name from config
-            connection_name = BrokerConfig.get("containers", "connection_name", default="Virtual Desktop")
-            connection["name"] = connection_name
+            settings = BrokerConfig.settings()
+            connection["name"] = settings.containers.connection_name
 
             # Update recording parameters from config
-            recording_config = BrokerConfig.get("guacamole", "recording", default={})
-            if recording_config.get("enabled", False):
-                parameters["recording-path"] = recording_config.get("path", "/recordings")
-                parameters["recording-include-keys"] = "true" if recording_config.get("include_keys", False) else "false"
-                parameters["create-recording-path"] = "true" if recording_config.get("auto_create_path", True) else "false"
+            recording = settings.guacamole.recording
+            if recording.enabled:
+                parameters["recording-path"] = recording.path
+                parameters["recording-include-keys"] = "true" if recording.include_keys else "false"
+                parameters["create-recording-path"] = "true" if recording.auto_create_path else "false"
 
                 # Only set recording-name if not empty
-                recording_name = recording_config.get("name", "")
+                recording_name = recording.name
                 if recording_name:
                     now = datetime.now()
                     recording_name = recording_name.replace("${GUAC_USERNAME}", username or "unknown")
@@ -345,7 +345,7 @@ class GuacamoleAPI:
         from broker.config.loader import BrokerConfig
 
         self.ensure_auth()
-        home_name = BrokerConfig.get("guacamole", "home_connection_name", default="Home")
+        home_name = BrokerConfig.settings().guacamole.home_connection_name
         conn_name = f"{home_name} - {username}"
 
         # Check if already exists
@@ -422,4 +422,8 @@ class GuacamoleAPI:
 
 
 # Global instance
-guac_api = GuacamoleAPI(GUACAMOLE_URL, GUAC_ADMIN_USER, GUAC_ADMIN_PASSWORD)
+guac_api = GuacamoleAPI(
+    GUACAMOLE_URL or "http://guacamole:8080/guacamole",
+    GUAC_ADMIN_USER or "guacadmin",
+    GUAC_ADMIN_PASSWORD or "",
+)

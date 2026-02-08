@@ -18,12 +18,12 @@ logger = logging.getLogger("session-broker")
 class DockerOrchestrator:
     """Docker-based container orchestrator."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize Docker client."""
         self._client = docker.from_env()
 
     @property
-    def client(self):
+    def client(self) -> docker.DockerClient:
         """Get the Docker client."""
         return self._client
 
@@ -34,10 +34,8 @@ class DockerOrchestrator:
         Returns:
             Network name
         """
-        network_name = BrokerConfig.get(
-            "orchestrator", "docker", "network",
-            default=BrokerConfig.get("containers", "network", default="guacamole_vnc-network")
-        )
+        settings = BrokerConfig.settings()
+        network_name = settings.orchestrator.docker.network or settings.containers.network
         try:
             self._client.networks.get(network_name)
         except docker.errors.NotFound:
@@ -62,10 +60,10 @@ class DockerOrchestrator:
         container_name = f"vnc-{session_id}"
 
         # Get container settings from config
-        container_config = BrokerConfig.get("containers", default={})
-        vnc_image = container_config.get("image", "vnc-browser:latest")
-        mem_limit = container_config.get("memory_limit", "2g")
-        shm_size = container_config.get("shm_size", "256m")
+        containers_cfg = BrokerConfig.settings().containers
+        vnc_image = containers_cfg.image
+        mem_limit = containers_cfg.memory_limit
+        shm_size = containers_cfg.shm_size
 
         vnc_network = self._get_network()
 
@@ -173,7 +171,7 @@ class DockerOrchestrator:
         """
         try:
             container = self._client.containers.get(container_id)
-            return container.status == "running"
+            return bool(container.status == "running")
         except docker.errors.NotFound:
             return False
         except Exception as e:

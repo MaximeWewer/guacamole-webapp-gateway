@@ -2,9 +2,11 @@
 Flask API routes for the Session Broker.
 """
 
+from __future__ import annotations
+
 import logging
 
-from flask import Blueprint, request
+from flask import Blueprint, Response, request
 
 from broker.config.settings import get_env
 from broker.config.secrets import secrets_provider
@@ -29,6 +31,9 @@ from broker.services.user_sync import user_sync
 
 logger = logging.getLogger("session-broker")
 
+# Type alias for Flask route returns
+RouteResponse = tuple[Response, int]
+
 # Create Blueprint
 api = Blueprint("api", __name__)
 
@@ -48,7 +53,7 @@ DATABASE_NAME = get_env("database_name", "guacamole")
 
 @api.route("/health")
 @limiter.exempt
-def health():
+def health() -> RouteResponse:
     """Health check endpoint."""
     db_ok = False
     try:
@@ -69,23 +74,22 @@ def health():
 
 
 @api.route("/api/secrets/status")
-def secrets_status():
+def secrets_status() -> RouteResponse:
     """Get secrets provider status."""
     return api_success(secrets_provider.get_status())
 
 
 @api.route("/api/config")
-def get_config():
+def get_config() -> RouteResponse:
     """Get broker configuration (non-sensitive)."""
-    containers = BrokerConfig.get("containers", default={})
-    sync_config = BrokerConfig.get("sync", default={})
+    settings = BrokerConfig.settings()
     return api_success({
-        "vnc_image": containers.get("image", "vnc-browser:latest"),
-        "vnc_network": containers.get("network", "guacamole_vnc-network"),
+        "vnc_image": settings.containers.image,
+        "vnc_network": settings.containers.network,
         "guacd_hostname": GUACD_HOSTNAME,
-        "connection_name": containers.get("connection_name", "Virtual Desktop"),
-        "user_sync_interval": sync_config.get("interval", 60),
-        "ignored_users": sync_config.get("ignored_users", ["guacadmin"]),
+        "connection_name": settings.containers.connection_name,
+        "user_sync_interval": settings.sync.interval,
+        "ignored_users": settings.sync.ignored_users,
         "database_host": DATABASE_HOST,
         "database_name": DATABASE_NAME,
         "secrets_provider": secrets_provider.get_status()
@@ -97,27 +101,32 @@ def get_config():
 # =============================================================================
 
 @api.route("/api/sessions")
-def list_sessions():
+def list_sessions() -> RouteResponse:
     """List all sessions."""
-    sessions = [
-        {**{k: v for k, v in s.items() if k != "vnc_password"}, "active": bool(s.get("container_id"))}
-        for s in SessionStore.list_sessions()
-    ]
+    sessions = []
+    for s in SessionStore.list_sessions():
+        if s is None:
+            continue
+        d = s.to_dict()
+        d.pop("vnc_password", None)
+        d["active"] = bool(s.container_id)
+        sessions.append(d)
     return api_success({"sessions": sessions})
 
 
 @api.route("/api/sessions/<session_id>", methods=["DELETE"])
 @limiter.limit(lambda: admin_limit)
-def force_cleanup(session_id: str):
+def force_cleanup(session_id: str) -> RouteResponse:
     """Force cleanup a session."""
     session = SessionStore.get_session(session_id)
     if not session:
         return api_error("Session not found", 404)
 
-    if session.get("container_id"):
-        destroy_container(session["container_id"])
+    if session.container_id:
+        destroy_container(session.container_id)
 
-    session.update({"container_id": None, "container_ip": None})
+    session.container_id = None
+    session.container_ip = None
     SessionStore.save_session(session_id, session)
     return api_success(message="Session cleaned up")
 
@@ -127,14 +136,14 @@ def force_cleanup(session_id: str):
 # =============================================================================
 
 @api.route("/api/sync", methods=["GET"])
-def get_sync_status():
+def get_sync_status() -> RouteResponse:
     """Get sync service status."""
     return api_success(user_sync.get_stats())
 
 
 @api.route("/api/sync", methods=["POST"])
 @limiter.limit(lambda: admin_limit)
-def trigger_sync():
+def trigger_sync() -> RouteResponse:
     """Trigger manual user sync."""
     new_users = user_sync.sync_users()
     return api_success({"new_users": new_users, "stats": user_sync.get_stats()})
@@ -146,7 +155,7 @@ def trigger_sync():
 
 @api.route("/api/users/<username>/provision", methods=["POST"])
 @limiter.limit(lambda: admin_limit)
-def provision_user(username: str):
+def provision_user(username: str) -> RouteResponse:
     """Provision a user connection."""
     try:
         username = validate_username(username)
@@ -161,7 +170,7 @@ def provision_user(username: str):
 
 @api.route("/api/users/<username>/refresh-config", methods=["POST"])
 @limiter.limit(lambda: admin_limit)
-def refresh_user_config(username: str):
+def refresh_user_config(username: str) -> RouteResponse:
     """Refresh user configuration from groups."""
     try:
         username = validate_username(username)
@@ -176,7 +185,7 @@ def refresh_user_config(username: str):
 
 
 @api.route("/api/users/<username>/groups")
-def get_user_groups_api(username: str):
+def get_user_groups_api(username: str) -> RouteResponse:
     """Get user's groups and effective configuration."""
     try:
         username = validate_username(username)
@@ -196,7 +205,7 @@ def get_user_groups_api(username: str):
 
 @api.route("/api/users/<username>/bookmarks", methods=["POST"])
 @limiter.limit(lambda: admin_limit)
-def add_user_bookmark(username: str):
+def add_user_bookmark(username: str) -> RouteResponse:
     """Add a bookmark for user."""
     try:
         username = validate_username(username)
@@ -219,7 +228,7 @@ def add_user_bookmark(username: str):
 
 
 @api.route("/api/users/<username>/profile")
-def get_user_profile(username: str):
+def get_user_profile(username: str) -> RouteResponse:
     """Get user profile information."""
     try:
         username = validate_username(username)
@@ -248,13 +257,13 @@ def get_user_profile(username: str):
 # =============================================================================
 
 @api.route("/api/groups")
-def list_groups():
+def list_groups() -> RouteResponse:
     """List all groups."""
     return api_success({"groups": group_config.get_all_groups()})
 
 
 @api.route("/api/groups/<group_name>")
-def get_group(group_name: str):
+def get_group(group_name: str) -> RouteResponse:
     """Get a specific group configuration."""
     try:
         group_name = validate_group_name(group_name)
@@ -268,7 +277,7 @@ def get_group(group_name: str):
 
 @api.route("/api/groups/<group_name>", methods=["PUT"])
 @limiter.limit(lambda: admin_limit)
-def update_group_api(group_name: str):
+def update_group_api(group_name: str) -> RouteResponse:
     """Create or update a group."""
     try:
         group_name = validate_group_name(group_name)
@@ -294,7 +303,7 @@ def update_group_api(group_name: str):
 
 @api.route("/api/groups/<group_name>", methods=["DELETE"])
 @limiter.limit(lambda: admin_limit)
-def delete_group_api(group_name: str):
+def delete_group_api(group_name: str) -> RouteResponse:
     """Delete a group."""
     try:
         group_name = validate_group_name(group_name)
@@ -313,7 +322,7 @@ def delete_group_api(group_name: str):
 # =============================================================================
 
 @api.route("/api/settings")
-def get_settings():
+def get_settings() -> RouteResponse:
     """Get broker settings."""
     return api_success({
         "merge_bookmarks": group_config.get_setting("merge_bookmarks", "true") == "true",
@@ -323,7 +332,7 @@ def get_settings():
 
 @api.route("/api/settings", methods=["PUT"])
 @limiter.limit(lambda: admin_limit)
-def update_settings():
+def update_settings() -> RouteResponse:
     """Update broker settings."""
     data = request.get_json() or {}
     if "merge_bookmarks" in data:
@@ -338,7 +347,7 @@ def update_settings():
 # =============================================================================
 
 @api.route("/api/guacamole/groups")
-def list_guacamole_groups():
+def list_guacamole_groups() -> RouteResponse:
     """List Guacamole user groups."""
     try:
         return api_success({"groups": guac_api.get_all_user_groups()})
@@ -352,19 +361,19 @@ def list_guacamole_groups():
 # =============================================================================
 
 @api.errorhandler(ValidationError)
-def handle_validation_error(e):
+def handle_validation_error(e: ValidationError) -> RouteResponse:
     """Handle validation errors."""
     return api_error(str(e), 400)
 
 
 @api.errorhandler(404)
-def handle_not_found(e):
+def handle_not_found(e: Exception) -> RouteResponse:
     """Handle 404 errors."""
     return api_error("Resource not found", 404)
 
 
 @api.errorhandler(500)
-def handle_server_error(e):
+def handle_server_error(e: Exception) -> RouteResponse:
     """Handle 500 errors."""
     logger.error(f"Internal server error: {e}")
     return api_error("Internal server error", 500)

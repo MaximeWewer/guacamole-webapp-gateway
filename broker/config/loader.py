@@ -2,18 +2,21 @@
 Configuration loaders for broker.yml and profiles.yml.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 from pathlib import Path
 
 import yaml
 
+from broker.config.models import BrokerSettings
 from broker.config.settings import get_env
 
 logger = logging.getLogger("session-broker")
 
 # Configuration paths
-CONFIG_PATH = Path(get_env("config_path", "/data/config"))
+CONFIG_PATH = Path(get_env("config_path", "/data/config") or "/data/config")
 PROFILES_CONFIG_FILE = CONFIG_PATH / "profiles.yml"
 BROKER_CONFIG_FILE = CONFIG_PATH / "broker.yml"
 
@@ -22,6 +25,7 @@ class BrokerConfig:
     """Manages broker configuration from YAML file."""
 
     _config: dict = {}
+    _typed_config: BrokerSettings | None = None
     _last_load: float = 0
     _cache_duration: int = 60
 
@@ -116,6 +120,7 @@ class BrokerConfig:
         if not BROKER_CONFIG_FILE.exists():
             logger.info(f"Broker config not found, using defaults: {BROKER_CONFIG_FILE}")
             cls._config = defaults
+            cls._typed_config = BrokerSettings.model_validate(cls._config)
             return cls._config
 
         try:
@@ -130,6 +135,7 @@ class BrokerConfig:
             logger.error(f"Error loading broker config: {e}")
             cls._config = defaults
 
+        cls._typed_config = BrokerSettings.model_validate(cls._config)
         return cls._config
 
     @classmethod
@@ -144,7 +150,7 @@ class BrokerConfig:
         return result
 
     @classmethod
-    def get(cls, *keys, default=None):
+    def get(cls, *keys: str, default: object = None) -> object:
         """Get a nested config value using dot notation or multiple keys."""
         config = cls.load()
         for key in keys:
@@ -155,6 +161,14 @@ class BrokerConfig:
         return config
 
     @classmethod
+    def settings(cls) -> BrokerSettings:
+        """Get typed configuration as a BrokerSettings instance."""
+        if cls._typed_config is None:
+            cls.load()
+        assert cls._typed_config is not None
+        return cls._typed_config
+
+    @classmethod
     def get_browser_type(cls) -> str:
         """
         Detect browser type from the container image name.
@@ -162,7 +176,7 @@ class BrokerConfig:
         Returns:
             'firefox' or 'chromium'
         """
-        image = cls.get("containers", "image", default="")
+        image = str(cls.get("containers", "image", default=""))
         image_lower = image.lower()
 
         if "firefox" in image_lower:
@@ -213,17 +227,20 @@ class ProfilesConfig:
         return config.get(profile_name)
 
     @classmethod
-    def get_user_config(cls, user_groups: list) -> dict:
+    def get_user_config(cls, user_groups: list[str]) -> dict[str, object]:
         """
         Get effective configuration for user based on their groups.
         Uses the highest priority profile that matches user's groups.
         """
         config = cls.load()
-        effective = {
+        groups: list[str] = []
+        bookmarks: list[dict[str, str]] = []
+        autofill: list[dict[str, str]] = []
+        effective: dict[str, object] = {
             "homepage": "about:blank",
-            "bookmarks": [],
-            "autofill": [],
-            "groups": []
+            "bookmarks": bookmarks,
+            "autofill": autofill,
+            "groups": groups,
         }
 
         # Find the highest priority matching profile
@@ -237,12 +254,12 @@ class ProfilesConfig:
                 if priority > best_priority:
                     best_priority = priority
                     best_profile = profile
-                    effective["groups"].append(group_name)
+                    groups.append(group_name)
 
         # Fall back to default if no matching profile
         if not best_profile and "default" in config:
             best_profile = config["default"]
-            effective["groups"].append("default")
+            groups.append("default")
 
         if best_profile:
             effective["homepage"] = best_profile.get("homepage", "about:blank")

@@ -2,8 +2,11 @@
 Database connection and initialization for the Session Broker.
 """
 
+from __future__ import annotations
+
 import logging
 from contextlib import contextmanager
+from typing import Generator
 
 import psycopg2
 
@@ -20,7 +23,7 @@ DATABASE_PASSWORD = get_env("database_password", required=True)
 
 DB_CONFIG = {
     "host": DATABASE_HOST,
-    "port": int(DATABASE_PORT),
+    "port": int(DATABASE_PORT or "5432"),
     "database": DATABASE_NAME,
     "user": DATABASE_USER,
     "password": DATABASE_PASSWORD
@@ -28,7 +31,7 @@ DB_CONFIG = {
 
 
 @contextmanager
-def get_db_connection():
+def get_db_connection() -> Generator[psycopg2.extensions.connection, None, None]:
     """
     Context manager for database connections.
 

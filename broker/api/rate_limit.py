@@ -24,18 +24,17 @@ def init_limiter(app: Flask) -> None:
     """Attach the limiter to the Flask app and configure from broker config."""
     global admin_limit
 
-    rl_config = BrokerConfig.get("security", "rate_limiting", default={})
-    enabled = rl_config.get("enabled", True)
+    rl = BrokerConfig.settings().security.rate_limiting
 
-    if not enabled:
+    if not rl.enabled:
         app.config["RATELIMIT_ENABLED"] = False
 
-    default_limit = rl_config.get("default_limit", "200/minute")
-    admin_limit = rl_config.get("admin_limit", "10/minute")
-    limiter._default_limits = [default_limit]
+    default_limit = rl.default_limit
+    admin_limit = rl.admin_limit
+    limiter._default_limits = [default_limit]  # type: ignore[attr-defined]
 
     limiter.init_app(app)
 
     @app.errorhandler(429)
-    def rate_limit_handler(e):
+    def rate_limit_handler(e: Exception) -> tuple:
         return api_error("Rate limit exceeded. Try again later.", 429)

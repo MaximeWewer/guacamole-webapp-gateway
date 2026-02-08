@@ -2,11 +2,14 @@
 User profile management for browser policies (Firefox & Chromium).
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 from broker.config.settings import get_env
 from broker.config.loader import BrokerConfig, ProfilesConfig
@@ -15,7 +18,7 @@ from broker.api.validators import sanitize_for_path
 logger = logging.getLogger("session-broker")
 
 # User data paths
-USER_DATA_PATH = Path(get_env("user_data_path", "/data/users"))
+USER_DATA_PATH = Path(get_env("user_data_path", "/data/users") or "/data/users")
 USER_DATA_PATH.mkdir(parents=True, exist_ok=True)
 
 
@@ -74,7 +77,7 @@ class UserProfile:
         """
         from broker.domain.guacamole import guac_api
 
-        config = {
+        config: dict[str, Any] = {
             "homepage": "about:blank",
             "bookmarks": [],
             "autofill": []
@@ -164,6 +167,16 @@ class UserProfile:
         return expanded
 
     @staticmethod
+    def add_bookmark(username: str, name: str, url: str) -> None:
+        """Add a single bookmark for a user by re-applying browser policies."""
+        raw_config = ProfilesConfig.get_user_config([])  # Will get defaults
+        raw_bookmarks = raw_config.get("bookmarks", [])
+        bookmarks: list[Any] = list(raw_bookmarks) if isinstance(raw_bookmarks, list) else []
+        bookmarks.append({"name": name, "url": url})
+        homepage = str(raw_config.get("homepage", ""))
+        UserProfile.set_browser_policies(username, bookmarks, homepage)
+
+    @staticmethod
     def _set_firefox_policies(username: str, bookmarks: list, homepage: str, autofill: list) -> None:
         """Generate Firefox enterprise policies."""
         user_path = UserProfile.get_user_path(username)
@@ -248,7 +261,7 @@ class UserProfile:
                     "url": bm["url"]
                 })
 
-        policies = {
+        policies: dict[str, Any] = {
             # Disable telemetry and updates
             "MetricsReportingEnabled": False,
             "SafeBrowsingProtectionLevel": 1,
@@ -300,7 +313,7 @@ class UserProfile:
         (policies_dir / "bookmarks.json").write_text(json.dumps(policies, indent=2))
 
     @staticmethod
-    def set_browser_policies(username: str, bookmarks: list, homepage: str = "", autofill: list = None) -> None:
+    def set_browser_policies(username: str, bookmarks: list, homepage: str = "", autofill: list[Any] | None = None) -> None:
         """
         Set browser policies based on configured browser type.
 
@@ -333,9 +346,11 @@ class UserProfile:
         config = ProfilesConfig.get_user_config(user_groups)
         browser_type = BrokerConfig.get_browser_type()
 
-        bookmarks = config.get("bookmarks", [])
-        homepage = config.get("homepage", "")
-        autofill = config.get("autofill", [])
+        raw_bookmarks = config.get("bookmarks", [])
+        bookmarks: list[Any] = raw_bookmarks if isinstance(raw_bookmarks, list) else []
+        homepage: str = str(config.get("homepage", ""))
+        raw_autofill = config.get("autofill", [])
+        autofill: list[Any] = raw_autofill if isinstance(raw_autofill, list) else []
 
         UserProfile.set_browser_policies(username, bookmarks, homepage, autofill)
 
@@ -354,12 +369,12 @@ class UserProfile:
             "browser": browser_type,
             "bookmarks": len(bookmarks),
             "homepage": homepage,
-            "autofill_entries": len(autofill)
+            "autofill_entries": len(autofill),
         }
 
     # Backward compatibility aliases
     @staticmethod
-    def set_firefox_policies(username: str, bookmarks: list, homepage: str = "", autofill: list = None) -> None:
+    def set_firefox_policies(username: str, bookmarks: list, homepage: str = "", autofill: list[Any] | None = None) -> None:
         """Deprecated: Use set_browser_policies instead."""
         UserProfile.set_browser_policies(username, bookmarks, homepage, autofill)
 

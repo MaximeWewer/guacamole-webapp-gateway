@@ -2,8 +2,10 @@
 Base classes and protocols for container orchestration.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass
@@ -19,7 +21,7 @@ class ContainerOrchestrator(Protocol):
     """Protocol defining the interface for container orchestration backends."""
 
     def spawn_container(
-        self, session_id: str, username: str, vnc_password: str
+        self, session_id: str, username: str | None, vnc_password: str
     ) -> ContainerInfo:
         """
         Spawn a VNC container/pod.
@@ -64,7 +66,7 @@ class ContainerOrchestrator(Protocol):
         """
         ...
 
-    def list_managed_containers(self) -> list[dict]:
+    def list_managed_containers(self) -> list[dict[str, Any]]:
         """
         List all managed containers/pods.
 
@@ -86,7 +88,7 @@ class ContainerOrchestrator(Protocol):
         """
         ...
 
-    def get_pool_containers(self) -> list[dict]:
+    def get_pool_containers(self) -> list[dict[str, Any]]:
         """
         Get list of available pool containers (running, unclaimed).
 

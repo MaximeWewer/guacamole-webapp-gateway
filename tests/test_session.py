@@ -76,11 +76,11 @@ class TestGetSession:
         result = SessionStore.get_session("sess-1")
 
         assert result is not None
-        assert result["session_id"] == "sess-1"
-        assert result["username"] == "alice"
-        assert isinstance(result["created_at"], float)
-        assert isinstance(result["started_at"], float)
-        assert isinstance(result["last_activity"], float)
+        assert result.session_id == "sess-1"
+        assert result.username == "alice"
+        assert isinstance(result.created_at, float)
+        assert isinstance(result.started_at, float)
+        assert isinstance(result.last_activity, float)
 
     def test_get_session_not_found(self, mock_db):
         """get_session returns None when no row found."""
@@ -126,7 +126,7 @@ class TestLookups:
         }
         result = SessionStore.get_session_by_username("bob")
         assert result is not None
-        assert result["username"] == "bob"
+        assert result.username == "bob"
         sql = mock_db.execute.call_args[0][0]
         assert "WHERE username" in sql
 
@@ -146,7 +146,7 @@ class TestLookups:
         }
         result = SessionStore.get_session_by_connection("42")
         assert result is not None
-        assert result["guac_connection_id"] == "42"
+        assert result.guac_connection_id == "42"
         sql = mock_db.execute.call_args[0][0]
         assert "WHERE guac_connection_id" in sql
 
@@ -176,8 +176,8 @@ class TestListSessions:
         ]
         result = SessionStore.list_sessions()
         assert len(result) == 2
-        assert result[0]["session_id"] == "s1"
-        assert result[1]["session_id"] == "s2"
+        assert result[0].session_id == "s1"
+        assert result[1].session_id == "s2"
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +210,7 @@ class TestPoolSessions:
         )
         result = SessionStore.get_pool_sessions()
         assert len(result) == 1
-        assert result[0]["container_id"] == "alive"
+        assert result[0].container_id == "alive"
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ from broker.config.loader import (
     PROFILES_CONFIG_FILE,
     BROKER_CONFIG_FILE,
 )
+from broker.config.models import BrokerSettings
 
 __all__ = [
     "VNC_PORT",
@@ -36,6 +37,7 @@ __all__ = [
     "secrets_provider",
     "SecretsProvider",
     "BrokerConfig",
+    "BrokerSettings",
     "ProfilesConfig",
     "YAMLConfig",
     "CONFIG_PATH",

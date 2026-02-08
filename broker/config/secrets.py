@@ -2,6 +2,8 @@
 Secrets Provider for Vault and environment variables.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import threading
@@ -23,7 +25,7 @@ class SecretsProvider:
     - AppRole authentication (recommended for production)
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.vault_addr = os.environ.get("VAULT_ADDR")
         self.vault_token = os.environ.get("VAULT_TOKEN")
         self.vault_role_id = os.environ.get("VAULT_ROLE_ID")
@@ -31,10 +33,10 @@ class SecretsProvider:
         self.vault_mount = os.environ.get("VAULT_MOUNT", "secret")
         self.vault_path = os.environ.get("VAULT_PATH", "guacamole/broker")
         self.use_vault = False
-        self._vault_token_expires = 0
+        self._vault_token_expires: float = 0
         self._secrets_cache: dict[str, str] = {}
         self._cache_ttl = 300
-        self._cache_time = 0
+        self._cache_time: float = 0
         self._lock = threading.Lock()
 
         if self.vault_addr:
@@ -112,7 +114,7 @@ class SecretsProvider:
                 logger.error(f"Error reading from Vault for key '{key}': {e}")
                 return None
 
-    def get(self, key: str, default: str = None) -> str:
+    def get(self, key: str, default: str | None = None) -> str | None:
         """
         Retrieve a secret: Vault > env > default.
 

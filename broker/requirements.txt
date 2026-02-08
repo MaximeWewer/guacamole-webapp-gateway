@@ -17,6 +17,9 @@ psycopg2-binary
 # YAML config
 pyyaml
 
+# Settings / validation
+pydantic
+
 # Rate limiting
 flask-limiter
 
@@ -24,3 +27,8 @@ flask-limiter
 pytest
 pytest-mock
 pytest-cov
+
+# Type checking
+mypy
+types-requests
+types-PyYAML

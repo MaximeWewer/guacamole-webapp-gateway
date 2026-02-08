@@ -2,8 +2,11 @@
 Factory for creating container orchestrators.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Union
+
+from typing import Any
 
 from broker.config.loader import BrokerConfig
 from broker.domain.orchestrator.base import ContainerOrchestrator
@@ -11,7 +14,7 @@ from broker.domain.orchestrator.base import ContainerOrchestrator
 logger = logging.getLogger("session-broker")
 
 # Singleton instance
-_orchestrator: Union[ContainerOrchestrator, None] = None
+_orchestrator: Any = None
 
 
 def get_orchestrator() -> ContainerOrchestrator:
@@ -29,7 +32,7 @@ def get_orchestrator() -> ContainerOrchestrator:
     if _orchestrator is not None:
         return _orchestrator
 
-    backend = BrokerConfig.get("orchestrator", "backend", default="docker")
+    backend = BrokerConfig.settings().orchestrator.backend
     logger.info(f"Initializing {backend} orchestrator")
 
     if backend == "kubernetes":

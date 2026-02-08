@@ -7,10 +7,12 @@ on all /api/* endpoints. Health check remains public.
 Fail-closed: if no API key is configured, all /api/* endpoints return 503.
 """
 
+from __future__ import annotations
+
 import hmac
 import logging
 
-from flask import request
+from flask import Response, request
 
 from broker.api.responses import api_error
 from broker.config.settings import get_env
@@ -56,7 +58,7 @@ def _extract_request_key() -> str | None:
     return None
 
 
-def require_api_key():
+def require_api_key() -> tuple[Response, int] | None:
     """
     Flask before_request hook that enforces API key authentication.
 

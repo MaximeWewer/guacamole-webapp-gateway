@@ -2,9 +2,12 @@
 User synchronization service for Guacamole users.
 """
 
+from __future__ import annotations
+
 import logging
 import threading
 import time
+from typing import Any
 import uuid
 
 from broker.config.settings import VNC_PORT, VNC_CONTAINER_TIMEOUT
@@ -36,7 +39,7 @@ class UserSyncService:
         self.interval = interval
         self.running = False
         self.last_sync: float = 0
-        self.sync_stats = {"total_synced": 0, "last_new_users": [], "errors": 0}
+        self.sync_stats: dict[str, Any] = {"total_synced": 0, "last_new_users": [], "errors": 0}
         self._lock = threading.Lock()
 
     def start(self) -> None:
@@ -55,7 +58,7 @@ class UserSyncService:
                     logger.info(f"New users provisioned: {new_users}")
 
                 # Pre-warm containers for existing users
-                prewarm_enabled = BrokerConfig.get("pool", "enabled", default=True)
+                prewarm_enabled = BrokerConfig.settings().pool.enabled
                 if prewarm_enabled:
                     self.prewarm_containers()
             except Exception as e:
@@ -109,10 +112,10 @@ class UserSyncService:
         Returns:
             Tuple of (can_start, reason)
         """
-        config = BrokerConfig.get("pool", "resources", default={})
-        min_free = config.get("min_free_memory_gb", 2.0)
-        max_total = config.get("max_total_memory_gb", 0)
-        max_percent = config.get("max_memory_percent", 0)
+        res = BrokerConfig.settings().pool.resources
+        min_free = res.min_free_memory_gb
+        max_total = res.max_total_memory_gb
+        max_percent = res.max_memory_percent
 
         # Check minimum free memory
         available = self.get_available_memory_gb()
@@ -122,7 +125,7 @@ class UserSyncService:
         # Check maximum total container memory
         if max_total > 0:
             container_mem = self.get_containers_memory_gb()
-            container_limit = BrokerConfig.get("containers", "memory_limit", default="2g")
+            container_limit = BrokerConfig.settings().containers.memory_limit
             # Parse memory limit (e.g., "2g" -> 2.0)
             limit_gb = float(container_limit.rstrip("gGmM"))
             if container_limit.lower().endswith("m"):
@@ -152,13 +155,13 @@ class UserSyncService:
 
         try:
             # Load config from broker.yml
-            pool_config = BrokerConfig.get("pool", default={})
-            if not pool_config.get("enabled", True):
+            pool_cfg = BrokerConfig.settings().pool
+            if not pool_cfg.enabled:
                 return
 
-            max_containers = pool_config.get("max_containers", 10)
-            batch_size = pool_config.get("batch_size", 3)
-            target_pool_size = pool_config.get("init_containers", 2)
+            max_containers = pool_cfg.max_containers
+            batch_size = pool_cfg.batch_size
+            target_pool_size = pool_cfg.init_containers
 
             # Check current container count
             current_count = self.get_running_container_count()
@@ -189,7 +192,7 @@ class UserSyncService:
             can_start, reason = self.can_start_container()
             if not can_start:
                 # Try force kill if enabled
-                force_kill = BrokerConfig.get("lifecycle", "force_kill_on_low_resources", default=True)
+                force_kill = BrokerConfig.settings().lifecycle.force_kill_on_low_resources
                 if force_kill:
                     killed = monitor.force_kill_oldest_inactive(count=1)
                     if killed > 0:
@@ -205,7 +208,7 @@ class UserSyncService:
                 can_start, reason = self.can_start_container()
                 if not can_start:
                     # Try force kill if enabled
-                    force_kill = BrokerConfig.get("lifecycle", "force_kill_on_low_resources", default=True)
+                    force_kill = BrokerConfig.settings().lifecycle.force_kill_on_low_resources
                     if force_kill:
                         killed = monitor.force_kill_oldest_inactive(count=1)
                         if killed > 0:
@@ -255,12 +258,12 @@ class UserSyncService:
         Initialize the container pool at startup.
         Creates pool.init_containers generic containers ready to be claimed.
         """
-        pool_config = BrokerConfig.get("pool", default={})
-        if not pool_config.get("enabled", True):
+        pool_cfg = BrokerConfig.settings().pool
+        if not pool_cfg.enabled:
             logger.info("Container pool disabled, skipping initialization")
             return
 
-        init_count = pool_config.get("init_containers", 2)
+        init_count = pool_cfg.init_containers
         if init_count <= 0:
             return
 
@@ -321,7 +324,7 @@ class UserSyncService:
         Returns:
             List of newly provisioned usernames
         """
-        ignored_users = set(BrokerConfig.get("sync", "ignored_users", default=["guacadmin"]))
+        ignored_users = set(BrokerConfig.settings().sync.ignored_users)
         guac_users = set(guac_api.get_users()) - ignored_users
         provisioned = SessionStore.get_provisioned_users()
         new_users = guac_users - provisioned
@@ -355,4 +358,4 @@ class UserSyncService:
 
 
 # Global instance
-user_sync = UserSyncService(interval=BrokerConfig.get("sync", "interval", default=60))
+user_sync = UserSyncService(interval=BrokerConfig.settings().sync.interval)

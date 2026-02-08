@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from broker.domain.types import SessionData
+
 
 # ---------------------------------------------------------------------------
 # Health
@@ -74,12 +76,12 @@ class TestSessions:
     def test_list_sessions(self, app_client, mocker):
         """GET /api/sessions → 200, vnc_password excluded."""
         mocker.patch("broker.api.routes.SessionStore.list_sessions", return_value=[
-            {
-                "session_id": "s1", "username": "alice",
-                "guac_connection_id": "42", "vnc_password": "secret",
-                "container_id": "c1", "container_ip": "10.0.0.1",
-                "created_at": 1000.0, "started_at": 1000.0, "last_activity": None,
-            }
+            SessionData(
+                session_id="s1", username="alice",
+                guac_connection_id="42", vnc_password="secret",
+                container_id="c1", container_ip="10.0.0.1",
+                created_at=1000.0, started_at=1000.0, last_activity=None,
+            )
         ])
         resp = app_client.get("/api/sessions")
         assert resp.status_code == 200
@@ -91,11 +93,11 @@ class TestSessions:
 
     def test_force_cleanup(self, app_client, mocker):
         """DELETE /api/sessions/X → 200, destroy called."""
-        mocker.patch("broker.api.routes.SessionStore.get_session", return_value={
-            "session_id": "s1", "username": "alice",
-            "container_id": "c1", "container_ip": "10.0.0.1",
-            "guac_connection_id": "42", "vnc_password": "pw",
-        })
+        mocker.patch("broker.api.routes.SessionStore.get_session", return_value=SessionData(
+            session_id="s1", username="alice",
+            container_id="c1", container_ip="10.0.0.1",
+            guac_connection_id="42", vnc_password="pw",
+        ))
         save_mock = mocker.patch("broker.api.routes.SessionStore.save_session")
         destroy_mock = mocker.patch("broker.api.routes.destroy_container")
 

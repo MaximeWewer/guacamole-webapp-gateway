@@ -45,14 +45,14 @@ class ConnectionMonitor:
 
                 # Handle new connections
                 for conn_id in current - self.active_connections:
-                    info = next((c for c in active.values() if c.get("connectionIdentifier") == conn_id), {})
+                    info: dict[str, str] = next((c for c in active.values() if c.get("connectionIdentifier") == conn_id), {})
                     on_connection_start(conn_id, info.get("username", "unknown"))
 
                 # Handle ended connections
                 for conn_id in self.active_connections - current:
                     session = SessionStore.get_session_by_connection(conn_id)
                     if session:
-                        on_connection_end(conn_id, session.get("username", "unknown"))
+                        on_connection_end(conn_id, session.username or "unknown")
 
                 self.active_connections = current
 
@@ -70,7 +70,7 @@ class ConnectionMonitor:
         Clean up containers that have been inactive longer than the timeout.
         Uses lifecycle.idle_timeout_minutes from config.
         """
-        timeout_minutes = BrokerConfig.get("lifecycle", "idle_timeout_minutes", default=3)
+        timeout_minutes = BrokerConfig.settings().lifecycle.idle_timeout_minutes
         if timeout_minutes <= 0:
             return  # No timeout configured
 
@@ -81,29 +81,30 @@ class ConnectionMonitor:
             cleaned = 0
 
             for session in sessions:
-                container_id = session.get("container_id")
-                if not container_id:
+                if session is None:
+                    continue
+                if not session.container_id:
                     continue
 
                 # Skip if container is currently in use
-                conn_id = session.get("guac_connection_id")
-                if conn_id and conn_id in self.active_connections:
+                if session.guac_connection_id and session.guac_connection_id in self.active_connections:
                     continue
 
                 # Check inactivity timeout
-                last_activity = session.get("last_activity") or session.get("started_at")
+                last_activity = session.last_activity or session.started_at
                 if not last_activity:
                     continue
 
                 inactive_seconds = now - last_activity
 
                 if inactive_seconds > timeout_seconds:
-                    username = session.get("username", "unknown")
+                    username = session.username or "unknown"
                     logger.info(f"Cleaning up inactive container for {username} "
                                f"(idle {inactive_seconds/60:.1f}min > {timeout_minutes}min)")
-                    destroy_container(container_id)
-                    session.update({"container_id": None, "container_ip": None})
-                    SessionStore.save_session(session["session_id"], session)
+                    destroy_container(session.container_id)
+                    session.container_id = None
+                    session.container_ip = None
+                    SessionStore.save_session(session.session_id, session)
                     cleaned += 1
 
             if cleaned > 0:
@@ -130,15 +131,15 @@ class ConnectionMonitor:
             # Get inactive sessions with containers, sorted by last_activity (oldest first)
             inactive = []
             for session in sessions:
-                container_id = session.get("container_id")
-                if not container_id:
+                if session is None:
+                    continue
+                if not session.container_id:
                     continue
 
-                conn_id = session.get("guac_connection_id")
-                if conn_id and conn_id in self.active_connections:
+                if session.guac_connection_id and session.guac_connection_id in self.active_connections:
                     continue  # Skip active connections
 
-                last_activity = session.get("last_activity") or session.get("started_at") or now
+                last_activity = session.last_activity or session.started_at or now
                 inactive.append((last_activity, session))
 
             # Sort by last_activity (oldest first)
@@ -146,11 +147,13 @@ class ConnectionMonitor:
 
             killed = 0
             for _, session in inactive[:count]:
-                username = session.get("username", "unknown")
+                username = session.username or "unknown"
                 logger.warning(f"Force killing container for {username} (low resources)")
-                destroy_container(session["container_id"])
-                session.update({"container_id": None, "container_ip": None})
-                SessionStore.save_session(session["session_id"], session)
+                if session.container_id:
+                    destroy_container(session.container_id)
+                session.container_id = None
+                session.container_ip = None
+                SessionStore.save_session(session.session_id, session)
                 killed += 1
 
             return killed

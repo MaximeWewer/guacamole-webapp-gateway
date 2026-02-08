@@ -5,6 +5,8 @@ This module provides a facade over the container orchestration backends
 (Docker or Kubernetes), maintaining backward compatibility with existing code.
 """
 
+from __future__ import annotations
+
 import logging
 import secrets
 import socket
