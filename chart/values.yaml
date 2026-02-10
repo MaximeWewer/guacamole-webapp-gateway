@@ -287,7 +287,10 @@ logging:
 #         username: "${GUAC_USERNAME}"
 #         password: "${vault:github_password}"
 
-# -- Browser profiles per Guacamole user group
+# -- Browser profiles per Guacamole user group.
+# Users in multiple groups receive the cumulative merge of all matching
+# profiles (bookmarks/autofill deduplicated by URL, homepage from highest
+# priority). Use the _users section for per-user overrides.
 profiles:
   default:
     description: "Default profile for all users"
@@ -298,6 +301,12 @@ profiles:
         url: "https://www.google.com"
       - name: "DuckDuckGo"
         url: "https://duckduckgo.com"
+  # _users:
+  #   alice:
+  #     homepage: "https://custom.example.com"
+  #     bookmarks:
+  #       - name: "Custom"
+  #         url: "https://custom.example.com"
 
 # -- Use an external ConfigMap for profiles instead of inline.
 # If set, the profiles section above is ignored.

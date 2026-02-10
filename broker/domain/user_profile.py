@@ -85,11 +85,11 @@ class UserProfile:
 
         try:
             user_groups = get_services().guac_api.get_user_groups(username)
-            yaml_config = ProfilesConfig.get_user_config(user_groups)
+            yaml_config = ProfilesConfig.get_user_config(user_groups, username=username)
             config.update(yaml_config)
         except Exception as e:
             logger.warning(f"Error getting config for {username}: {e}")
-            default_config = ProfilesConfig.get_user_config(["default"])
+            default_config = ProfilesConfig.get_user_config(["default"], username=username)
             config.update(default_config)
         return config
 
@@ -169,7 +169,7 @@ class UserProfile:
     @staticmethod
     def add_bookmark(username: str, name: str, url: str) -> None:
         """Add a single bookmark for a user by re-applying browser policies."""
-        raw_config = ProfilesConfig.get_user_config([])  # Will get defaults
+        raw_config = ProfilesConfig.get_user_config([], username=username)
         raw_bookmarks = raw_config.get("bookmarks", [])
         bookmarks: list[Any] = list(raw_bookmarks) if isinstance(raw_bookmarks, list) else []
         bookmarks.append({"name": name, "url": url})
@@ -343,7 +343,7 @@ class UserProfile:
         Returns:
             Applied configuration summary
         """
-        config = ProfilesConfig.get_user_config(user_groups)
+        config = ProfilesConfig.get_user_config(user_groups, username=username)
         browser_type = BrokerConfig.get_browser_type()
 
         raw_bookmarks = config.get("bookmarks", [])

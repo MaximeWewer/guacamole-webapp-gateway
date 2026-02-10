@@ -10,7 +10,7 @@ from flask import Blueprint, Response, request
 
 from broker.config.settings import get_env
 from broker.config.secrets import secrets_provider
-from broker.config.loader import BrokerConfig
+from broker.config.loader import BrokerConfig, ProfilesConfig
 from broker.persistence.database import get_db_connection
 from broker.api.validators import (
     ValidationError,
@@ -446,7 +446,7 @@ def get_user_groups_api(username: str) -> RouteResponse:
     try:
         username = validate_username(username)
         user_groups = get_services().guac_api.get_user_groups(username)
-        config = group_config.get_user_config(user_groups)
+        config = ProfilesConfig.get_user_config(user_groups, username=username)
         return api_success({
             "username": username,
             "guacamole_groups": user_groups,

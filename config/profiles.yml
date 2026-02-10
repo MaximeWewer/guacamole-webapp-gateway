@@ -25,8 +25,11 @@ default:
       url: "https://duckduckgo.com"
 
 # =============================================================================
-# Example Profiles
+# Example Profiles (cumulative merge)
 # =============================================================================
+# Users belonging to multiple groups receive the UNION of all matching
+# profiles (bookmarks and autofill are deduplicated by URL).
+# The homepage is taken from the highest-priority profile.
 #
 # developers:
 #   description: "Development team"
@@ -44,29 +47,31 @@ default:
 #       username: "${GUAC_USERNAME}"
 #       password: "${vault:github_password}"
 #
-# marketing:
-#   description: "Marketing team"
-#   priority: 5
-#   homepage: "https://analytics.google.com"
-#   bookmarks:
-#     - name: "Google Analytics"
-#       url: "https://analytics.google.com"
-#     - name: "Google Ads"
-#       url: "https://ads.google.com"
-#
 # intranet:
 #   description: "Intranet access"
 #   priority: 5
-#   homepage: "https://intranet.company.com"
 #   bookmarks:
 #     - name: "Intranet"
 #       url: "https://intranet.company.com"
-#     - name: "Webmail"
-#       url: "https://mail.company.com"
 #   autofill:
 #     - url: "https://intranet.company.com/login"
 #       username: "${GUAC_USERNAME}"
 #       password: "${vault:intranet_password}"
+#
+# =============================================================================
+# Per-user overrides (highest priority)
+# =============================================================================
+# _users:
+#   alice:
+#     homepage: "https://alice-dashboard.internal"
+#     bookmarks:
+#       - name: "Alice Dashboard"
+#         url: "https://alice-dashboard.internal"
+#   bob:
+#     autofill:
+#       - url: "https://special-app.com"
+#         username: "bob@company.com"
+#         password: "${vault:bob_special}"
 
 # =============================================================================
 # Variable Expansion

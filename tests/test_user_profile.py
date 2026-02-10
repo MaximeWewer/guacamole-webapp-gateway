@@ -198,6 +198,179 @@ class TestApplyProfileConfig:
 # get_volume_mounts
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Cumulative merge (ProfilesConfig.get_user_config)
+# ---------------------------------------------------------------------------
+
+class TestCumulativeMerge:
+
+    def _load_profiles(self, mocker, profiles_dict):
+        """Helper: patch ProfilesConfig.load to return given dict."""
+        mocker.patch("broker.config.loader.ProfilesConfig.load", return_value=profiles_dict)
+
+    def test_merge_multiple_profiles(self, mocker):
+        """User in 2 groups → bookmarks from both profiles merged."""
+        self._load_profiles(mocker, {
+            "developers": {
+                "priority": 10,
+                "homepage": "https://github.com",
+                "bookmarks": [{"name": "GitHub", "url": "https://github.com"}],
+            },
+            "intranet": {
+                "priority": 5,
+                "bookmarks": [{"name": "Intranet", "url": "https://intranet.example.com"}],
+            },
+        })
+        from broker.config.loader import ProfilesConfig
+        result = ProfilesConfig.get_user_config(["developers", "intranet"])
+        urls = [bm["url"] for bm in result["bookmarks"]]
+        assert "https://github.com" in urls
+        assert "https://intranet.example.com" in urls
+        assert len(result["bookmarks"]) == 2
+
+    def test_merge_dedup_bookmarks(self, mocker):
+        """Same bookmark URL in 2 profiles → appears only once."""
+        self._load_profiles(mocker, {
+            "a": {
+                "priority": 1,
+                "bookmarks": [{"name": "Google", "url": "https://google.com"}],
+            },
+            "b": {
+                "priority": 2,
+                "bookmarks": [{"name": "Google2", "url": "https://google.com"}],
+            },
+        })
+        from broker.config.loader import ProfilesConfig
+        result = ProfilesConfig.get_user_config(["a", "b"])
+        assert len(result["bookmarks"]) == 1
+
+    def test_merge_dedup_autofill(self, mocker):
+        """Same autofill URL in 2 profiles → appears only once."""
+        self._load_profiles(mocker, {
+            "a": {
+                "priority": 1,
+                "autofill": [{"url": "https://app.com", "username": "user1"}],
+            },
+            "b": {
+                "priority": 2,
+                "autofill": [{"url": "https://app.com", "username": "user2"}],
+            },
+        })
+        from broker.config.loader import ProfilesConfig
+        result = ProfilesConfig.get_user_config(["a", "b"])
+        assert len(result["autofill"]) == 1
+
+    def test_homepage_highest_priority_wins(self, mocker):
+        """2 profiles with homepage → highest priority wins."""
+        self._load_profiles(mocker, {
+            "low": {"priority": 1, "homepage": "https://low.com"},
+            "high": {"priority": 10, "homepage": "https://high.com"},
+        })
+        from broker.config.loader import ProfilesConfig
+        result = ProfilesConfig.get_user_config(["low", "high"])
+        assert result["homepage"] == "https://high.com"
+
+    def test_default_always_inherited(self, mocker):
+        """User without specific group → receives default profile."""
+        self._load_profiles(mocker, {
+            "default": {
+                "priority": 0,
+                "homepage": "https://default.com",
+                "bookmarks": [{"name": "Default", "url": "https://default.com"}],
+            },
+        })
+        from broker.config.loader import ProfilesConfig
+        result = ProfilesConfig.get_user_config(["unknown_group"])
+        assert result["homepage"] == "https://default.com"
+        assert "default" in result["groups"]
+
+    def test_default_merged_with_group(self, mocker):
+        """User in a group + default exists → bookmarks from both are merged."""
+        self._load_profiles(mocker, {
+            "default": {
+                "priority": 0,
+                "homepage": "https://default.com",
+                "bookmarks": [{"name": "Default", "url": "https://default.com"}],
+            },
+            "developers": {
+                "priority": 10,
+                "homepage": "https://github.com",
+                "bookmarks": [{"name": "GitHub", "url": "https://github.com"}],
+            },
+        })
+        from broker.config.loader import ProfilesConfig
+        result = ProfilesConfig.get_user_config(["developers"])
+        urls = [bm["url"] for bm in result["bookmarks"]]
+        assert "https://default.com" in urls
+        assert "https://github.com" in urls
+        assert result["homepage"] == "https://github.com"
+
+    def test_user_override_homepage(self, mocker):
+        """_users.alice.homepage overrides profile homepage."""
+        self._load_profiles(mocker, {
+            "default": {"priority": 0, "homepage": "https://default.com"},
+            "_users": {
+                "alice": {"homepage": "https://alice.example.com"},
+            },
+        })
+        from broker.config.loader import ProfilesConfig
+        result = ProfilesConfig.get_user_config(["default"], username="alice")
+        assert result["homepage"] == "https://alice.example.com"
+
+    def test_user_override_bookmarks(self, mocker):
+        """_users.alice.bookmarks are added at the front."""
+        self._load_profiles(mocker, {
+            "default": {
+                "priority": 0,
+                "bookmarks": [{"name": "Google", "url": "https://google.com"}],
+            },
+            "_users": {
+                "alice": {
+                    "bookmarks": [{"name": "Alice", "url": "https://alice.example.com"}],
+                },
+            },
+        })
+        from broker.config.loader import ProfilesConfig
+        result = ProfilesConfig.get_user_config(["default"], username="alice")
+        assert result["bookmarks"][0]["url"] == "https://alice.example.com"
+        assert len(result["bookmarks"]) == 2
+
+    def test_user_override_autofill(self, mocker):
+        """_users.alice.autofill entries are added."""
+        self._load_profiles(mocker, {
+            "default": {"priority": 0},
+            "_users": {
+                "alice": {
+                    "autofill": [{"url": "https://special.com", "username": "alice"}],
+                },
+            },
+        })
+        from broker.config.loader import ProfilesConfig
+        result = ProfilesConfig.get_user_config(["default"], username="alice")
+        assert len(result["autofill"]) == 1
+        assert result["autofill"][0]["url"] == "https://special.com"
+
+    def test_backward_compat_no_username(self, mocker):
+        """Calling without username still works (backward compat)."""
+        self._load_profiles(mocker, {
+            "default": {
+                "priority": 0,
+                "homepage": "https://default.com",
+                "bookmarks": [{"name": "Default", "url": "https://default.com"}],
+            },
+            "_users": {
+                "alice": {"homepage": "https://alice.example.com"},
+            },
+        })
+        from broker.config.loader import ProfilesConfig
+        result = ProfilesConfig.get_user_config(["default"])
+        assert result["homepage"] == "https://default.com"
+
+
+# ---------------------------------------------------------------------------
+# get_volume_mounts
+# ---------------------------------------------------------------------------
+
 class TestGetVolumeMounts:
 
     def test_get_volume_mounts(self, user_data_tmp, mock_broker_config):

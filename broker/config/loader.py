@@ -246,46 +246,90 @@ class ProfilesConfig:
         return config.get(profile_name)
 
     @classmethod
-    def get_user_config(cls, user_groups: list[str]) -> dict[str, object]:
+    def get_user_config(cls, user_groups: list[str], username: str | None = None) -> dict[str, object]:
         """
         Get effective configuration for user based on their groups.
-        Uses the highest priority profile that matches user's groups.
+
+        Merges all matching profiles cumulatively (sorted by priority),
+        deduplicates bookmarks/autofill by URL, and applies per-user
+        overrides from the ``_users`` section.
+
+        Args:
+            user_groups: List of group names the user belongs to.
+            username: Optional username for per-user overrides.
+
+        Returns:
+            Dict with homepage, bookmarks, autofill, groups keys.
         """
         config = cls.load()
+
+        # Separate per-user overrides from profiles
+        users_overrides = config.get("_users", {})
+
+        # Collect all matched profiles
+        matched: list[tuple[int, str, dict]] = []
+        for group_name in user_groups:
+            profile = config.get(group_name)
+            if profile and not group_name.startswith("_"):
+                priority = profile.get("priority", 0)
+                matched.append((priority, group_name, profile))
+
+        # Add default if not already matched and it exists
+        if "default" not in user_groups and "default" in config:
+            default_profile = config["default"]
+            matched.append((default_profile.get("priority", 0), "default", default_profile))
+
+        # Sort by priority ascending (highest last → overrides homepage)
+        matched.sort(key=lambda x: x[0])
+
+        # Cumulative merge
+        seen_bookmark_urls: set[str] = set()
+        seen_autofill_urls: set[str] = set()
+        bookmarks: list[dict] = []
+        autofill: list[dict] = []
+        homepage = "about:blank"
         groups: list[str] = []
-        bookmarks: list[dict[str, str]] = []
-        autofill: list[dict[str, str]] = []
-        effective: dict[str, object] = {
-            "homepage": "about:blank",
+
+        for _priority, name, profile in matched:
+            groups.append(name)
+
+            for bm in profile.get("bookmarks", []):
+                url = bm.get("url", "")
+                if url and url not in seen_bookmark_urls:
+                    bookmarks.append(bm)
+                    seen_bookmark_urls.add(url)
+
+            for af in profile.get("autofill", []):
+                url = af.get("url", "")
+                if url and url not in seen_autofill_urls:
+                    autofill.append(af)
+                    seen_autofill_urls.add(url)
+
+            if profile.get("homepage"):
+                homepage = profile["homepage"]
+
+        # Per-user overrides (highest priority)
+        if username and isinstance(users_overrides, dict) and username in users_overrides:
+            user_cfg = users_overrides[username]
+            if user_cfg.get("homepage"):
+                homepage = user_cfg["homepage"]
+            for bm in user_cfg.get("bookmarks", []):
+                url = bm.get("url", "")
+                if url and url not in seen_bookmark_urls:
+                    bookmarks.insert(0, bm)
+                    seen_bookmark_urls.add(url)
+            for af in user_cfg.get("autofill", []):
+                url = af.get("url", "")
+                if url and url not in seen_autofill_urls:
+                    autofill.insert(0, af)
+                    seen_autofill_urls.add(url)
+
+        return {
+            "homepage": homepage,
             "bookmarks": bookmarks,
             "autofill": autofill,
             "groups": groups,
         }
-
-        # Find the highest priority matching profile
-        best_profile = None
-        best_priority = -1
-
-        for group_name in user_groups:
-            profile = config.get(group_name)
-            if profile:
-                priority = profile.get("priority", 0)
-                if priority > best_priority:
-                    best_priority = priority
-                    best_profile = profile
-                    groups.append(group_name)
-
-        # Fall back to default if no matching profile
-        if not best_profile and "default" in config:
-            best_profile = config["default"]
-            groups.append("default")
-
-        if best_profile:
-            effective["homepage"] = best_profile.get("homepage", "about:blank")
-            effective["bookmarks"] = best_profile.get("bookmarks", [])
-            effective["autofill"] = best_profile.get("autofill", [])
-
-        return effective
 
     @classmethod
     def reload(cls) -> None:
