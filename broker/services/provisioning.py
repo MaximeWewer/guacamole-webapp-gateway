@@ -110,7 +110,7 @@ def provision_user_connection(username: str) -> str:
 
         # Create connection with actual container IP
         settings = BrokerConfig.settings()
-        connection_name = settings.containers.connection_name
+        connection_name = f"{settings.containers.connection_name} - {username}"
         conn_id = guac_api.create_connection(
             name=connection_name,
             hostname=container_ip,

@@ -274,7 +274,8 @@ class GuacamoleAPI:
 
             # Update connection name from config
             settings = BrokerConfig.settings()
-            connection["name"] = settings.containers.connection_name
+            base_name = settings.containers.connection_name
+            connection["name"] = f"{base_name} - {username}" if username else base_name
 
             # Update recording parameters from config
             recording = settings.guacamole.recording
