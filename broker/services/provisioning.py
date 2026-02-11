@@ -6,6 +6,8 @@ import logging
 import time
 import uuid
 
+import psycopg2
+
 from broker.config.settings import VNC_PORT, VNC_CONTAINER_TIMEOUT, SESSION_ID_LENGTH
 from broker.config.loader import BrokerConfig
 from broker.domain.session import SessionStore
@@ -43,7 +45,14 @@ def provision_user_connection(username: str) -> str:
         # Check for existing session with running container
         existing = SessionStore.get_session_by_username(username)
         if existing and existing.guac_connection_id and existing.container_id:
-            return existing.guac_connection_id
+            if is_container_running(existing.container_id):
+                return existing.guac_connection_id
+            # Container is dead — clean up stale session
+            logger.warning(
+                f"Stale session for {username}: container {existing.container_id} no longer running"
+            )
+            guac_api.delete_connection(existing.guac_connection_id)
+            SessionStore.delete_session(existing.session_id)
 
         UserProfile.ensure_profile(username)
 
@@ -128,16 +137,26 @@ def provision_user_connection(username: str) -> str:
         # Update session with guac connection ID
         # For pool sessions, this updates the existing session
         # For new sessions, this creates a new session
-        SessionStore.save_session(session_id, {
-            "session_id": session_id,
-            "username": username,
-            "guac_connection_id": conn_id,
-            "vnc_password": vnc_password,
-            "container_id": container_id,
-            "container_ip": container_ip,
-            "created_at": time.time() if not claimed_from_pool else None,  # Keep original for claimed
-            "started_at": time.time()
-        })
+        try:
+            SessionStore.save_session(session_id, {
+                "session_id": session_id,
+                "username": username,
+                "guac_connection_id": conn_id,
+                "vnc_password": vnc_password,
+                "container_id": container_id,
+                "container_ip": container_ip,
+                "created_at": time.time() if not claimed_from_pool else None,  # Keep original for claimed
+                "started_at": time.time()
+            })
+        except psycopg2.IntegrityError:
+            # Race condition: another thread already provisioned this user
+            logger.info(f"Race condition for {username}: session already exists, cleaning up")
+            destroy_container(container_id)
+            guac_api.delete_connection(conn_id)
+            existing = SessionStore.get_session_by_username(username)
+            if existing and existing.guac_connection_id:
+                return existing.guac_connection_id
+            raise RuntimeError(f"Race condition for {username} but no session found")
 
         logger.info(f"Connection provisioned for {username}: {conn_id}")
         return conn_id

@@ -199,7 +199,7 @@ class TestSyncConnectionConfig:
 
         assert result is True
         put_body = mock_put.call_args.kwargs.get("json") or mock_put.call_args[1].get("json")
-        assert put_body["name"] == "My Desktop"
+        assert put_body["name"] == "My Desktop - alice"
         assert put_body["parameters"]["recording-path"] == "/rec"
 
 

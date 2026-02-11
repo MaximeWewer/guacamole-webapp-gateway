@@ -123,6 +123,7 @@ class TestProvisionUserConnection:
             container_ip="10.0.0.1",
         )
         mocker.patch("broker.services.provisioning.SessionStore.get_session_by_username", return_value=existing)
+        mocker.patch("broker.services.provisioning.is_container_running", return_value=True)
 
         from broker.services.provisioning import provision_user_connection
 
@@ -130,6 +131,80 @@ class TestProvisionUserConnection:
         assert conn_id == "42"
         # Should not spawn or create a new connection
         mock_guac_api.create_connection.assert_not_called()
+
+    def test_provision_stale_session_cleans_up(
+        self, mocker, mock_db, mock_guac_api, mock_services, mock_orchestrator, mock_broker_config
+    ):
+        """Existing session with dead container → clean up and re-provision."""
+        stale = SessionData(
+            session_id="s-stale",
+            username="alice",
+            guac_connection_id="old-conn",
+            container_id="cnt-dead",
+            container_ip="10.0.0.1",
+        )
+        mocker.patch(
+            "broker.services.provisioning.SessionStore.get_session_by_username",
+            return_value=stale,
+        )
+        mocker.patch("broker.services.provisioning.is_container_running", return_value=False)
+        delete_mock = mocker.patch("broker.services.provisioning.SessionStore.delete_session")
+        mocker.patch("broker.services.provisioning.SessionStore.get_pool_sessions", return_value=[])
+        mocker.patch("broker.services.provisioning.SessionStore.save_session")
+        mocker.patch("broker.services.provisioning.UserProfile.ensure_profile")
+        mocker.patch("broker.services.provisioning.UserProfile.apply_group_config", return_value={"groups": []})
+        mocker.patch("broker.services.provisioning.wait_for_vnc", return_value=True)
+        mocker.patch("broker.services.provisioning.spawn_vnc_container", return_value=("cnt-new", "10.0.0.5"))
+        mocker.patch("broker.services.provisioning.generate_vnc_password", return_value="pw")
+
+        from broker.services.provisioning import provision_user_connection
+
+        conn_id = provision_user_connection("alice")
+
+        # Stale session should be cleaned up
+        mock_guac_api.delete_connection.assert_called_once_with("old-conn")
+        delete_mock.assert_called_once_with("s-stale")
+        # New connection should be created
+        assert conn_id == "42"
+        mock_guac_api.create_connection.assert_called_once()
+
+    def test_provision_race_condition_integrity_error(
+        self, mocker, mock_db, mock_guac_api, mock_services, mock_orchestrator, mock_broker_config
+    ):
+        """save_session raises IntegrityError → clean up and return winner's conn_id."""
+        import psycopg2
+
+        mocker.patch("broker.services.provisioning.SessionStore.get_session_by_username", side_effect=[
+            None,  # First call: no existing session
+            SessionData(  # Second call (after IntegrityError): winner's session
+                session_id="s-winner",
+                username="alice",
+                guac_connection_id="winner-conn",
+                container_id="cnt-winner",
+                container_ip="10.0.0.2",
+            ),
+        ])
+        mocker.patch("broker.services.provisioning.SessionStore.get_pool_sessions", return_value=[])
+        mocker.patch(
+            "broker.services.provisioning.SessionStore.save_session",
+            side_effect=psycopg2.IntegrityError("duplicate key"),
+        )
+        mocker.patch("broker.services.provisioning.UserProfile.ensure_profile")
+        mocker.patch("broker.services.provisioning.UserProfile.apply_group_config", return_value={"groups": []})
+        mocker.patch("broker.services.provisioning.wait_for_vnc", return_value=True)
+        mocker.patch("broker.services.provisioning.spawn_vnc_container", return_value=("cnt-loser", "10.0.0.3"))
+        mocker.patch("broker.services.provisioning.generate_vnc_password", return_value="pw")
+        destroy_mock = mocker.patch("broker.services.provisioning.destroy_container")
+
+        from broker.services.provisioning import provision_user_connection
+
+        conn_id = provision_user_connection("alice")
+
+        # Should return the winner's connection
+        assert conn_id == "winner-conn"
+        # Should clean up the loser's resources
+        destroy_mock.assert_called_once_with("cnt-loser")
+        mock_guac_api.delete_connection.assert_called_once_with("42")  # mock returns "42"
 
     def test_provision_applies_group_config(
         self, mocker, mock_db, mock_guac_api, mock_services, mock_orchestrator, mock_broker_config
