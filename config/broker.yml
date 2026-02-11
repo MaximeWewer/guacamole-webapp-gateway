@@ -70,7 +70,7 @@ containers:
   # Available images from ghcr.io/maximewewer/docker-browser-vnc:
   #   - 2026.01.2-firefox   (Firefox ESR)
   #   - 2026.01.2-chromium  (Chromium)
-  image: ghcr.io/maximewewer/docker-browser-vnc:2026.01.2-chromium
+  image: ghcr.io/maximewewer/docker-browser-vnc:2026.02.1-chromium
   # Connection name displayed in Guacamole
   connection_name: "Virtual Desktop"
   # Docker network for VNC containers (Docker mode only)
@@ -121,7 +121,7 @@ guacamole:
   # Force display of home page instead of auto-connecting
   force_home_page: true
   # Name of the placeholder home connection
-  home_connection_name: "Home"
+  home_connection_name: ""
   # Session recording (screen capture)
   recording:
     enabled: true

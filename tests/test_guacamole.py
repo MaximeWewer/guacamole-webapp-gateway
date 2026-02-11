@@ -3,7 +3,7 @@ Tests for broker.domain.guacamole.GuacamoleAPI.
 """
 
 import time
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock
 
 import pytest
 import requests
@@ -295,3 +295,51 @@ class TestMiscMethods:
         ))
         groups = api.get_user_groups("alice")
         assert groups == ["developers", "admins"]
+
+
+# ---------------------------------------------------------------------------
+# 403 re-authentication
+# ---------------------------------------------------------------------------
+
+class TestReauthOn403:
+
+    def test_retries_on_403_then_succeeds(self, mocker):
+        """First call returns 403 → invalidate token → re-auth → retry succeeds."""
+        api = _make_api()
+        api.token = "stale-token"
+        api.token_expires = time.time() + 3000
+
+        resp_403 = _mock_response(status_code=403)
+        resp_200 = _mock_response(json_data={"user1": {}})
+
+        mock_get = mocker.patch(
+            "broker.domain.guacamole.requests.get", side_effect=[resp_403, resp_200]
+        )
+        mock_post = mocker.patch(
+            "broker.domain.guacamole.requests.post",
+            return_value=_mock_response(
+                json_data={"authToken": "fresh-token", "availableDataSources": ["postgresql"]}
+            ),
+        )
+
+        users = api.get_users()
+
+        assert users == ["user1"]
+        assert api.token == "fresh-token"
+        # First GET returned 403, then POST to re-auth, then second GET succeeded
+        assert mock_get.call_count == 2
+        mock_post.assert_called_once()
+
+    def test_no_retry_on_non_403_error(self, mocker):
+        """Non-403 error → raise immediately, no retry."""
+        api = _make_api()
+        api.token = "tok"
+        api.token_expires = time.time() + 3000
+
+        mocker.patch(
+            "broker.domain.guacamole.requests.get",
+            return_value=_mock_response(status_code=500),
+        )
+
+        with pytest.raises(requests.HTTPError):
+            api.get_users()

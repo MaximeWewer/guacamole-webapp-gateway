@@ -156,7 +156,7 @@ vnc:
     # -- VNC container image repository
     repository: ghcr.io/maximewewer/docker-browser-vnc
     # -- VNC container image tag
-    tag: 2026.01.2-chromium
+    tag: 2026.02.1-chromium
   # -- Connection name displayed in Guacamole
   connectionName: "Virtual Desktop"
   # -- Timeout in seconds to wait for VNC to be ready

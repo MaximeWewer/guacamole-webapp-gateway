@@ -6,7 +6,7 @@ Extend Apache Guacamole with web application support. This project adds a **Sess
 
 ## Overview
 
-Traditional Guacamole provides RDP/VNC/SSH access to full desktops and servers. This project adds a new use case: **web application access** through lightweight browser containers.
+Traditional Guacamole provides VNC, RDP, SSH, Telnet, and Kubernetes access. This project adds a new use case: **web application access** through lightweight browser containers.
 
 When a user logs in, the broker automatically provisions a dedicated VNC container running only a web browser. The browser is pre-configured with:
 
@@ -67,29 +67,35 @@ When a user logs in, the broker automatically provisions a dedicated VNC contain
 │                    VNC Pods (spawned by broker)                │
 ├────────────────────────────────────────────────────────────────┤
 │  - Per-user browser containers                                 │
-│  - Firefox ESR or Chromium                                     │
+│  - Firefox or Chromium                                         │
 │  - Managed bookmarks and policies                              │
 └────────────────────────────────────────────────────────────────┘
 ```
 
 ### Components
 
-| Service            | Description                                     |
-| ------------------ | ----------------------------------------------- |
-| **guacamole**      | Apache Guacamole web application                |
-| **guacd**          | Guacamole protocol server (VNC gateway)         |
-| **session-broker** | Python service managing container lifecycle     |
-| **postgres**       | Database for Guacamole and broker state         |
-| **VNC pods**       | Per-user browser instances for webapp access    |
+| Service            | Description                                  |
+| ------------------ | -------------------------------------------- |
+| **guacamole**      | Apache Guacamole web application             |
+| **guacd**          | Guacamole protocol server (VNC gateway)      |
+| **session-broker** | Python service managing container lifecycle  |
+| **postgres**       | Database for Guacamole and broker state      |
+| **VNC pods**       | Per-user browser instances for webapp access |
 
 ## Requirements
 
-- Kubernetes 1.25+
-- Helm 3.10+
-- [guacamole-helm](https://github.com/MaximeWewer/guacamole-helm) deployed
-- 4GB RAM minimum (8GB+ recommended for multiple users)
+The broker supports two deployment modes:
 
-## Quick start
+|                   | Kubernetes                                                      | Docker Compose                              |
+| ----------------- | --------------------------------------------------------------- | ------------------------------------------- |
+| **Guacamole**     | [guacamole-helm](https://github.com/MaximeWewer/guacamole-helm) | Standard docker-compose                     |
+| **Orchestrator**  | Pods via K8s API                                                | Containers via Docker socket                |
+| **Configuration** | `values.yaml` + ConfigMap                                       | `config/broker.yml` + `config/profiles.yml` |
+| **Secrets**       | K8s Secrets + Vault                                             | Environment variables + Vault               |
+| **Min resources** | Kubernetes 1.25+, Helm 3.10+                                    | Docker 24+, Docker Compose v2               |
+| **RAM**           | 4 GB (8 GB+ recommended)                                        | 4 GB (8 GB+ recommended)                    |
+
+## Kubernetes deployment (Helm)
 
 ### 1. Deploy Guacamole first
 
@@ -153,6 +159,105 @@ kubectl port-forward -n guacamole svc/gateway-guacamole-webapp-gateway 5000:5000
 curl http://localhost:5000/health
 ```
 
+## Docker Compose deployment
+
+For environments without Kubernetes, the broker can run alongside Guacamole in Docker Compose using the Docker socket to manage VNC containers.
+
+### 1. Prerequisites
+
+A running Guacamole stack (guacamole, guacd, PostgreSQL). See the [Apache Guacamole documentation](https://guacamole.apache.org/doc/1.6.0/gug/guacamole-docker.html) for setup instructions.
+
+### 2. Configuration files
+
+The `config/` directory contains the runtime configuration:
+
+| File                  | Purpose                                                                              |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| `config/broker.yml`   | Broker settings (orchestrator, sync, containers, lifecycle, pool, security, logging) |
+| `config/profiles.yml` | User profiles (bookmarks, homepage, autofill per group, per-user overrides)          |
+| `config/setup.yml`    | Deployment settings (database, Guacamole, SSL, nginx) — used by `setup.sh`           |
+
+Copy and edit them for your environment:
+
+```bash
+cp config/broker.yml config/broker.yml       # adjust container image, network, etc.
+cp config/profiles.yml config/profiles.yml   # define your user groups and bookmarks
+```
+
+### 3. Docker Compose service
+
+Add the broker to your existing `docker-compose.yml`:
+
+```yaml
+services:
+  session-broker:
+    image: ghcr.io/maximewewer/guacamole-webapp-gateway:latest
+    restart: unless-stopped
+    volumes:
+      - ./config:/data/config:ro
+      - broker-data:/data/users
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      GUACAMOLE_URL: "http://guacamole:8080/guacamole"
+      GUACAMOLE_ADMIN_USER: "guacadmin"
+      GUACAMOLE_ADMIN_PASSWORD: "${GUACAMOLE_ADMIN_PASSWORD}"
+      DATABASE_HOST: "postgres"
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: "guacamole"
+      DATABASE_USER: "guacamole"
+      DATABASE_PASSWORD: "${DATABASE_PASSWORD}"
+      BROKER_API_KEY: "${BROKER_API_KEY}"
+    ports:
+      - "5000:5000"
+    networks:
+      - guacamole-network
+    depends_on:
+      - guacamole
+      - postgres
+
+volumes:
+  broker-data:
+```
+
+Key points:
+
+- Mount `./config` to `/data/config` (read-only) for `broker.yml` and `profiles.yml`
+- Mount the Docker socket for container orchestration
+- The `broker-data` volume persists user profile data (browser policies, desktop files)
+
+### 4. Docker-specific settings in `broker.yml`
+
+When using the Docker orchestrator, these additional settings apply:
+
+```yaml
+orchestrator:
+  backend: docker
+  docker:
+    network: guacamole_vnc-network    # Docker network shared with guacd
+
+containers:
+  image: ghcr.io/maximewewer/docker-browser-vnc:2026.02.1-chromium
+  connection_name: "Virtual Desktop"
+  network: guacamole_vnc-network      # Must match orchestrator.docker.network
+  memory_limit: "1g"                  # Per-container memory limit
+  shm_size: "256m"                    # Shared memory (needed for browsers)
+  vnc_timeout: 30
+```
+
+These fields (`network`, `memory_limit`, `shm_size`) are only used in Docker mode and are ignored when deploying on Kubernetes.
+
+### 5. Verify
+
+```bash
+docker compose up -d
+
+# Check health
+curl http://localhost:5000/health
+
+# Check logs
+docker compose logs -f session-broker
+```
+
 ## Configuration
 
 ### Helm values
@@ -186,7 +291,7 @@ apiKey:
 vnc:
   image:
     repository: ghcr.io/maximewewer/docker-browser-vnc
-    tag: 2026.01.2-chromium
+    tag: 2026.02.1-chromium
   resources:
     requests: { memory: "512Mi", cpu: "250m" }
     limits: { memory: "2Gi", cpu: "1000m" }
@@ -206,10 +311,22 @@ See `chart/values.yaml` for the complete list of options.
 
 ### User profiles
 
-Profiles define browser configuration per Guacamole user group:
+Profiles define browser configuration per Guacamole user group. Users belonging to multiple groups receive the **cumulative merge** of all matching profiles:
+
+- **Bookmarks** and **autofill** entries are merged (deduplicated by URL)
+- **Homepage** is taken from the highest-priority profile
+- The `default` profile is always inherited if no specific match is found
 
 ```yaml
 profiles:
+  default:
+    description: "All users"
+    priority: 0
+    homepage: "https://www.google.com"
+    bookmarks:
+      - name: "Google"
+        url: "https://www.google.com"
+
   developers:
     description: "Development team"
     priority: 10
@@ -224,6 +341,30 @@ profiles:
         username: "${GUAC_USERNAME}"
         password: "${vault:github_password}"
 ```
+
+A user in both `developers` and `default` groups gets all bookmarks from both profiles, with `https://github.com` as homepage (highest priority wins).
+
+#### Per-user overrides
+
+The `_users` section allows overriding any profile setting for a specific user (highest priority):
+
+```yaml
+profiles:
+  # ... group profiles above ...
+  _users:
+    alice:
+      homepage: "https://alice-dashboard.internal"
+      bookmarks:
+        - name: "Alice Dashboard"
+          url: "https://alice-dashboard.internal"
+    bob:
+      autofill:
+        - url: "https://special-app.com"
+          username: "bob@company.com"
+          password: "${vault:bob_special}"
+```
+
+For Docker Compose deployments, these settings go directly in `config/profiles.yml` (same YAML structure, without the `profiles:` wrapper).
 
 **Variable expansion:**
 
@@ -330,36 +471,36 @@ curl http://localhost:5000/metrics
 
 Provided by `prometheus-flask-exporter`, these metrics cover every HTTP route automatically:
 
-| Metric | Type | Description |
-|--------|------|-------------|
+| Metric                                | Type      | Description                                |
+| ------------------------------------- | --------- | ------------------------------------------ |
 | `flask_http_request_duration_seconds` | Histogram | Request latency by method, path and status |
-| `flask_http_request_total` | Counter | Total requests by method, status |
+| `flask_http_request_total`            | Counter   | Total requests by method, status           |
 
 #### Business metrics
 
 Custom metrics updated periodically by the ConnectionMonitor:
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `broker_active_containers` | Gauge | VNC containers currently running |
-| `broker_pool_containers` | Gauge | Pool containers available (unclaimed) |
-| `broker_active_connections` | Gauge | Active Guacamole connections |
+| Metric                                 | Type      | Description                                     |
+| -------------------------------------- | --------- | ----------------------------------------------- |
+| `broker_active_containers`             | Gauge     | VNC containers currently running                |
+| `broker_pool_containers`               | Gauge     | Pool containers available (unclaimed)           |
+| `broker_active_connections`            | Gauge     | Active Guacamole connections                    |
 | `broker_provisioning_duration_seconds` | Histogram | User provisioning latency (buckets: 0.5s - 60s) |
-| `broker_errors_total` | Counter | Errors by endpoint label |
+| `broker_errors_total`                  | Counter   | Errors by endpoint label                        |
 
 #### Database pool
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `broker_db_pool_size` | Gauge | Total connections in the pool |
+| Metric                | Type  | Description                       |
+| --------------------- | ----- | --------------------------------- |
+| `broker_db_pool_size` | Gauge | Total connections in the pool     |
 | `broker_db_pool_used` | Gauge | Connections currently checked out |
 
 #### Circuit breaker
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `broker_circuit_breaker_state` | Gauge | State per circuit: 0=closed, 1=open, 2=half-open |
-| `broker_circuit_breaker_trips_total` | Counter | Times the circuit tripped to OPEN |
+| Metric                               | Type    | Description                                      |
+| ------------------------------------ | ------- | ------------------------------------------------ |
+| `broker_circuit_breaker_state`       | Gauge   | State per circuit: 0=closed, 1=open, 2=half-open |
+| `broker_circuit_breaker_trips_total` | Counter | Times the circuit tripped to OPEN                |
 
 #### Prometheus scrape config example
 
@@ -399,7 +540,7 @@ spec:
 This project uses [docker-browser-vnc](https://github.com/MaximeWewer/docker-browser-vnc):
 
 - **Minimal footprint** - Debian with Openbox, just enough for a browser
-- **Firefox ESR or Chromium** - Enterprise-ready browsers
+- **Firefox or Chromium** - Enterprise-ready browsers
 - **VNC server** - TigerVNC with clipboard support
 - **Managed policies** - Pre-configured bookmarks, homepage, restrictions
 
@@ -472,29 +613,29 @@ The broker exposes a REST API on port 5000. All endpoints except `/health` requi
 
 ### User operations
 
-| Endpoint                               | Method | Auth | Description                    |
-| -------------------------------------- | ------ | ---- | ------------------------------ |
-| `/api/users/<username>/provision`      | POST   | Yes  | Provision VNC connection       |
-| `/api/users/<username>/groups`         | GET    | Yes  | Get user's groups & config     |
-| `/api/users/<username>/refresh-config` | POST   | Yes  | Reload group configuration     |
-| `/api/users/<username>/bookmarks`      | POST   | Yes  | Update user bookmarks          |
-| `/api/users/<username>/profile`        | GET    | Yes  | Get user's resolved profile    |
+| Endpoint                               | Method | Auth | Description                 |
+| -------------------------------------- | ------ | ---- | --------------------------- |
+| `/api/users/<username>/provision`      | POST   | Yes  | Provision VNC connection    |
+| `/api/users/<username>/groups`         | GET    | Yes  | Get user's groups & config  |
+| `/api/users/<username>/refresh-config` | POST   | Yes  | Reload group configuration  |
+| `/api/users/<username>/bookmarks`      | POST   | Yes  | Update user bookmarks       |
+| `/api/users/<username>/profile`        | GET    | Yes  | Get user's resolved profile |
 
 ### Groups
 
-| Endpoint               | Method | Auth | Description                  |
-| ---------------------- | ------ | ---- | ---------------------------- |
-| `/api/groups`          | GET    | Yes  | List all group configs       |
-| `/api/groups/<name>`   | GET    | Yes  | Get a group configuration    |
-| `/api/groups/<name>`   | PUT    | Yes  | Create/update a group config |
-| `/api/groups/<name>`   | DELETE | Yes  | Delete a group configuration |
+| Endpoint             | Method | Auth | Description                  |
+| -------------------- | ------ | ---- | ---------------------------- |
+| `/api/groups`        | GET    | Yes  | List all group configs       |
+| `/api/groups/<name>` | GET    | Yes  | Get a group configuration    |
+| `/api/groups/<name>` | PUT    | Yes  | Create/update a group config |
+| `/api/groups/<name>` | DELETE | Yes  | Delete a group configuration |
 
 ### Settings
 
-| Endpoint        | Method | Auth | Description             |
-| --------------- | ------ | ---- | ----------------------- |
-| `/api/settings` | GET    | Yes  | Get broker settings     |
-| `/api/settings` | PUT    | Yes  | Update broker settings  |
+| Endpoint        | Method | Auth | Description            |
+| --------------- | ------ | ---- | ---------------------- |
+| `/api/settings` | GET    | Yes  | Get broker settings    |
+| `/api/settings` | PUT    | Yes  | Update broker settings |
 
 ### Sync
 
@@ -505,9 +646,9 @@ The broker exposes a REST API on port 5000. All endpoints except `/health` requi
 
 ### Guacamole
 
-| Endpoint                | Method | Auth | Description                    |
-| ----------------------- | ------ | ---- | ------------------------------ |
-| `/api/guacamole/groups` | GET    | Yes  | List Guacamole user groups     |
+| Endpoint                | Method | Auth | Description                |
+| ----------------------- | ------ | ---- | -------------------------- |
+| `/api/guacamole/groups` | GET    | Yes  | List Guacamole user groups |
 
 ## Troubleshooting
 
@@ -600,10 +741,10 @@ kubectl exec -n guacamole deploy/gateway-guacamole-webapp-gateway -- \
 │       ├── configmap.yaml
 │       ├── secret.yaml
 │       └── rbac.yaml
-├── config/                    # Example configuration files
-│   ├── broker.yml             # Broker settings reference
-│   ├── profiles.yml           # User profiles reference
-│   └── setup.yml              # Initial setup reference
+├── config/                    # Runtime configuration (Docker Compose)
+│   ├── broker.yml             # Broker settings (mounted to /data/config)
+│   ├── profiles.yml           # User profiles (mounted to /data/config)
+│   └── setup.yml              # Deployment settings (Docker Compose infra)
 ├── tests/                     # Test suite
 └── pyproject.toml             # Project metadata & tool config
 ```
