@@ -86,7 +86,7 @@ jobs:
         env:
           DOCKER_BUILD_SUMMARY: false
         with:
-          context: .
+          context: broker/
           file: broker/Dockerfile
           platforms: linux/amd64
           push: true
