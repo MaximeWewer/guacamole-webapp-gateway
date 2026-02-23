@@ -1,0 +1,97 @@
+name: Build container
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/guacamole-webapp-gateway
+
+jobs:
+  # =============================================================================
+  # Job 1: Prepare build
+  # =============================================================================
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    outputs:
+      image_name_lower: ${{ steps.lowercase.outputs.image_name_lower }}
+      repository_owner_lower: ${{ steps.lowercase.outputs.repository_owner_lower }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Convert names to lowercase
+        id: lowercase
+        run: |
+          IMAGE_NAME_LOWER=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+
+          echo "image_name_lower=${IMAGE_NAME_LOWER}" >> $GITHUB_OUTPUT
+          echo "repository_owner_lower=${OWNER_LOWER}" >> $GITHUB_OUTPUT
+
+          echo "Image name (lowercase): ${IMAGE_NAME_LOWER}"
+          echo "Repository owner (lowercase): ${OWNER_LOWER}"
+
+  # =============================================================================
+  # Job 2: Build Docker images
+  # =============================================================================
+  build-images:
+    name: Build image
+    runs-on: ubuntu-latest
+    needs: prepare
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate Docker metadata and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ needs.prepare.outputs.image_name_lower }}
+          tags: |
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=Guacamole WebApp Gateway
+            org.opencontainers.image.description=Extend Apache Guacamole with web application support
+            org.opencontainers.image.vendor=Maxime Wewer
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/blob/main/README.md
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_SUMMARY: false
+        with:
+          context: broker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.meta.outputs.tags }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,oci-mediatypes=true
