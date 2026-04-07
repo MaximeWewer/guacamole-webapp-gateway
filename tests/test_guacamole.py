@@ -215,7 +215,10 @@ class TestGrantPermission:
         api.token = "tok"
         api.token_expires = time.time() + 3000
 
-        mock_patch = mocker.patch("broker.domain.guacamole.requests.patch")
+        mock_patch = mocker.patch(
+            "broker.domain.guacamole.requests.patch",
+            return_value=_mock_response(status_code=204),
+        )
         api.grant_connection_permission("alice", "42")
 
         mock_patch.assert_called_once()
@@ -289,6 +292,7 @@ class TestMiscMethods:
         api = _make_api()
         api.token = "tok"
         api.token_expires = time.time() + 3000
+        api.available_data_sources = ["postgresql"]
 
         mocker.patch("broker.domain.guacamole.requests.get", return_value=_mock_response(
             json_data=["developers", "admins"]
@@ -308,6 +312,7 @@ class TestReauthOn403:
         api = _make_api()
         api.token = "stale-token"
         api.token_expires = time.time() + 3000
+        api.available_data_sources = ["postgresql"]
 
         resp_403 = _mock_response(status_code=403)
         resp_200 = _mock_response(json_data={"user1": {}})
@@ -335,6 +340,7 @@ class TestReauthOn403:
         api = _make_api()
         api.token = "tok"
         api.token_expires = time.time() + 3000
+        api.available_data_sources = ["postgresql"]
 
         mocker.patch(
             "broker.domain.guacamole.requests.get",
@@ -343,3 +349,100 @@ class TestReauthOn403:
 
         with pytest.raises(requests.HTTPError):
             api.get_users()
+
+
+# ---------------------------------------------------------------------------
+# Multi-datasource support
+# ---------------------------------------------------------------------------
+
+class TestMultiDatasource:
+
+    def test_get_users_merges_all_datasources(self, mocker):
+        """Users from postgresql + openid + saml are merged and deduplicated."""
+        api = _make_api()
+        api.token = "tok"
+        api.token_expires = time.time() + 3000
+        api.available_data_sources = ["postgresql", "openid", "saml"]
+
+        def mock_get_side_effect(url, **kwargs):
+            if "/data/postgresql/users" in url:
+                return _mock_response(json_data={"alice": {}, "bob": {}})
+            elif "/data/openid/users" in url:
+                return _mock_response(json_data={"charlie": {}, "alice": {}})
+            elif "/data/saml/users" in url:
+                return _mock_response(json_data={"dave": {}})
+            return _mock_response(status_code=404)
+
+        mocker.patch("broker.domain.guacamole.requests.get", side_effect=mock_get_side_effect)
+        users = sorted(api.get_users())
+
+        assert users == ["alice", "bob", "charlie", "dave"]
+
+    def test_get_users_tolerates_partial_datasource_failure(self, mocker):
+        """If one datasource fails, users from others are still returned."""
+        api = _make_api()
+        api.token = "tok"
+        api.token_expires = time.time() + 3000
+        api.available_data_sources = ["postgresql", "openid"]
+
+        def mock_get_side_effect(url, **kwargs):
+            if "/data/postgresql/users" in url:
+                return _mock_response(json_data={"alice": {}})
+            elif "/data/openid/users" in url:
+                return _mock_response(status_code=500)
+            return _mock_response(status_code=404)
+
+        mocker.patch("broker.domain.guacamole.requests.get", side_effect=mock_get_side_effect)
+        users = api.get_users()
+
+        assert users == ["alice"]
+
+    def test_get_user_groups_finds_user_in_secondary_datasource(self, mocker):
+        """User exists only in openid datasource → groups returned from there."""
+        api = _make_api()
+        api.token = "tok"
+        api.token_expires = time.time() + 3000
+        api.available_data_sources = ["postgresql", "openid"]
+
+        def mock_get_side_effect(url, **kwargs):
+            if "/data/postgresql/users/charlie/userGroups" in url:
+                return _mock_response(status_code=404)
+            elif "/data/openid/users/charlie/userGroups" in url:
+                return _mock_response(json_data=["developers"])
+            return _mock_response(status_code=404)
+
+        mocker.patch("broker.domain.guacamole.requests.get", side_effect=mock_get_side_effect)
+        groups = api.get_user_groups("charlie")
+
+        assert groups == ["developers"]
+
+    def test_grant_permission_finds_user_in_secondary_datasource(self, mocker):
+        """User in openid datasource → permission granted there."""
+        api = _make_api()
+        api.token = "tok"
+        api.token_expires = time.time() + 3000
+        api.available_data_sources = ["postgresql", "openid"]
+
+        def mock_patch_side_effect(url, **kwargs):
+            if "/data/postgresql/" in url:
+                return _mock_response(status_code=404)
+            elif "/data/openid/" in url:
+                return _mock_response(status_code=204)
+            return _mock_response(status_code=404)
+
+        mocker.patch("broker.domain.guacamole.requests.patch", side_effect=mock_patch_side_effect)
+        api.grant_connection_permission("charlie", "42")  # Should not raise
+
+    def test_authenticate_stores_all_datasources(self, mocker):
+        """authenticate() stores all available datasources."""
+        api = _make_api()
+        mocker.patch("broker.domain.guacamole.requests.post", return_value=_mock_response(
+            json_data={
+                "authToken": "tok-123",
+                "availableDataSources": ["postgresql", "openid", "cas"],
+            }
+        ))
+        api.authenticate()
+
+        assert api.available_data_sources == ["postgresql", "openid", "cas"]
+        assert api.data_source == "postgresql"

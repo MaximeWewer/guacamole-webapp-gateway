@@ -41,6 +41,7 @@ class GuacamoleAPI:
         self.token: str | None = None
         self.token_expires: float = 0
         self.data_source = "postgresql"
+        self.available_data_sources: list[str] = []
         self._lock = threading.Lock()
         self._circuit = circuit_breaker or CircuitBreaker(name="guacamole")
 
@@ -71,7 +72,9 @@ class GuacamoleAPI:
         self.token = data["authToken"]
         # Token valid for ~1 hour, refresh at 58 minutes
         self.token_expires = time.time() + 3500
-        self.data_source = list(data.get("availableDataSources", ["postgresql"]))[0]
+        self.available_data_sources = list(data.get("availableDataSources", ["postgresql"]))
+        self.data_source = self.available_data_sources[0]
+        logger.info(f"Guacamole auth OK, available datasources: {self.available_data_sources}")
         return self.token
 
     def _get_auth_params(self) -> tuple[str, str]:
@@ -93,6 +96,7 @@ class GuacamoleAPI:
         method: Callable[..., Any],
         path: str,
         *,
+        data_source: str | None = None,
         raise_for_status: bool = True,
         timeout: int = 10,
         **kwargs: Any,
@@ -103,6 +107,7 @@ class GuacamoleAPI:
         Args:
             method: HTTP method (requests.get, requests.post, etc.)
             path: API path relative to /api/session/data/{ds}/
+            data_source: Specific datasource to query (defaults to primary)
             raise_for_status: Whether to raise on non-2xx responses
             timeout: Request timeout in seconds
             **kwargs: Additional arguments passed to the request
@@ -112,6 +117,7 @@ class GuacamoleAPI:
         """
         for attempt in range(2):
             token, ds = self._get_auth_params()
+            ds = data_source or ds
             url = f"{self.base_url}/api/session/data/{ds}/{path}"
             resp = self._request(
                 method, url, params={"token": token}, timeout=timeout, **kwargs
@@ -131,17 +137,46 @@ class GuacamoleAPI:
 
     def get_users(self) -> list:
         """
-        Get list of Guacamole users.
+        Get list of Guacamole users from all available datasources.
+
+        Queries each datasource (postgresql, openid, saml, cas, etc.)
+        and merges the results into a deduplicated list.
 
         Returns:
             List of usernames
         """
-        resp = self._do_request(requests.get, "users")
-        return list(resp.json().keys())
+        all_users: set[str] = set()
+        last_error: Exception | None = None
+        success_count = 0
+
+        self._get_auth_params()  # ensure auth + available_data_sources populated
+        with self._lock:
+            datasources = list(self.available_data_sources)
+
+        for ds in datasources:
+            try:
+                resp = self._do_request(requests.get, "users", data_source=ds)
+                users = resp.json().keys()
+                all_users.update(users)
+                success_count += 1
+                logger.debug(f"Fetched {len(users)} users from datasource '{ds}'")
+            except CircuitOpenError:
+                raise
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Failed to fetch users from datasource '{ds}': {e}")
+
+        if success_count == 0 and last_error is not None:
+            raise last_error
+
+        return list(all_users)
 
     def get_user_groups(self, username: str) -> list:
         """
-        Get groups for a user.
+        Get groups for a user, searching across all datasources.
+
+        A user exists in only one datasource, so this tries each
+        until it finds the user's groups.
 
         Args:
             username: Username
@@ -149,8 +184,27 @@ class GuacamoleAPI:
         Returns:
             List of group names
         """
-        resp = self._do_request(requests.get, f"users/{username}/userGroups")
-        return resp.json()
+        self._get_auth_params()  # ensure auth + available_data_sources populated
+        with self._lock:
+            datasources = list(self.available_data_sources)
+
+        for ds in datasources:
+            try:
+                resp = self._do_request(
+                    requests.get,
+                    f"users/{username}/userGroups",
+                    data_source=ds,
+                    raise_for_status=False,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+            except CircuitOpenError:
+                raise
+            except Exception:
+                continue
+
+        logger.warning(f"User '{username}' not found in any datasource for groups lookup")
+        return []
 
     def get_all_user_groups(self) -> dict:
         """
@@ -328,13 +382,36 @@ class GuacamoleAPI:
 
     def grant_connection_permission(self, username: str, conn_id: str) -> None:
         """
-        Grant connection permission to a user.
+        Grant connection permission to a user, searching across all datasources.
 
         Args:
             username: Username
             conn_id: Connection identifier
         """
         permissions = [{"op": "add", "path": f"/connectionPermissions/{conn_id}", "value": "READ"}]
+
+        self._get_auth_params()  # ensure auth + available_data_sources populated
+        with self._lock:
+            datasources = list(self.available_data_sources)
+
+        for ds in datasources:
+            try:
+                resp = self._do_request(
+                    requests.patch,
+                    f"users/{username}/permissions",
+                    data_source=ds,
+                    json=permissions,
+                    raise_for_status=False,
+                )
+                if resp.status_code in (200, 204):
+                    return
+            except CircuitOpenError:
+                raise
+            except Exception:
+                continue
+
+        logger.warning(f"Could not grant permission for user '{username}' in any datasource")
+        # Fall back to primary datasource and let it raise
         self._do_request(
             requests.patch, f"users/{username}/permissions", json=permissions
         )
