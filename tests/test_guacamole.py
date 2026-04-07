@@ -40,6 +40,7 @@ class TestAuthenticate:
     def test_authenticate_success(self, mocker):
         """POST /api/tokens → stores token + data_source."""
         api = _make_api()
+        mocker.patch.object(api, "_discover_sso_datasources")
         mocker.patch("broker.domain.guacamole.requests.post", return_value=_mock_response(
             json_data={
                 "authToken": "tok-123",
@@ -62,6 +63,7 @@ class TestEnsureAuth:
         api.token = "old-token"
         api.token_expires = time.time() - 100  # expired
 
+        mocker.patch.object(api, "_discover_sso_datasources")
         mock_post = mocker.patch("broker.domain.guacamole.requests.post", return_value=_mock_response(
             json_data={"authToken": "new-token", "availableDataSources": ["postgresql"]}
         ))
@@ -314,6 +316,9 @@ class TestReauthOn403:
         api.token_expires = time.time() + 3000
         api.available_data_sources = ["postgresql"]
 
+        # Skip SSO discovery during re-auth to keep side_effect predictable
+        mocker.patch.object(api, "_discover_sso_datasources")
+
         resp_403 = _mock_response(status_code=403)
         resp_200 = _mock_response(json_data={"user1": {}})
 
@@ -434,8 +439,9 @@ class TestMultiDatasource:
         api.grant_connection_permission("charlie", "42")  # Should not raise
 
     def test_authenticate_stores_all_datasources(self, mocker):
-        """authenticate() stores all available datasources."""
+        """authenticate() stores advertised datasources + discovers SSO ones."""
         api = _make_api()
+        mocker.patch.object(api, "_discover_sso_datasources")
         mocker.patch("broker.domain.guacamole.requests.post", return_value=_mock_response(
             json_data={
                 "authToken": "tok-123",
@@ -446,3 +452,30 @@ class TestMultiDatasource:
 
         assert api.available_data_sources == ["postgresql", "openid", "cas"]
         assert api.data_source == "postgresql"
+
+    def test_discover_sso_datasources(self, mocker):
+        """SSO datasources not in availableDataSources are probed and added."""
+        api = _make_api()
+
+        def mock_get_side_effect(url, **kwargs):
+            if "/data/openid/users" in url:
+                return _mock_response(json_data={"sso-user": {}})
+            elif "/data/saml/users" in url:
+                return _mock_response(status_code=404)
+            elif "/data/cas/users" in url:
+                return _mock_response(json_data={"cas-user": {}})
+            return _mock_response(status_code=404)
+
+        mocker.patch("broker.domain.guacamole.requests.get", side_effect=mock_get_side_effect)
+        mocker.patch("broker.domain.guacamole.requests.post", return_value=_mock_response(
+            json_data={
+                "authToken": "tok-456",
+                "availableDataSources": ["postgresql"],
+            }
+        ))
+        api.authenticate()
+
+        assert "postgresql" in api.available_data_sources
+        assert "openid" in api.available_data_sources
+        assert "cas" in api.available_data_sources
+        assert "saml" not in api.available_data_sources

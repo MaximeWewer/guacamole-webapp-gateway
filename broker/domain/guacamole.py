@@ -74,8 +74,36 @@ class GuacamoleAPI:
         self.token_expires = time.time() + 3500
         self.available_data_sources = list(data.get("availableDataSources", ["postgresql"]))
         self.data_source = self.available_data_sources[0]
-        logger.info(f"Guacamole auth OK, available datasources: {self.available_data_sources}")
+        self._discover_sso_datasources()
+        logger.info(f"Guacamole auth OK, datasources: {self.available_data_sources}")
         return self.token
+
+    # SSO datasources not advertised in availableDataSources but queryable
+    SSO_DATASOURCES = ("openid", "saml", "cas")
+
+    def _discover_sso_datasources(self) -> None:
+        """Probe well-known SSO datasources and add any that respond.
+
+        SSO extensions (openid, saml, cas) don't appear in
+        ``availableDataSources`` for JDBC-authenticated admins, but their
+        ``/users`` endpoint is still reachable.  Must be called under
+        ``self._lock`` with a valid token.
+        """
+        assert self.token is not None
+        known = set(self.available_data_sources)
+        for ds in self.SSO_DATASOURCES:
+            if ds in known:
+                continue
+            try:
+                url = f"{self.base_url}/api/session/data/{ds}/users"
+                resp = self._request(
+                    requests.get, url, params={"token": self.token}, timeout=5,
+                )
+                if resp.status_code == 200:
+                    self.available_data_sources.append(ds)
+                    logger.info(f"Discovered SSO datasource '{ds}'")
+            except Exception:
+                pass
 
     def _get_auth_params(self) -> tuple[str, str]:
         """Return ``(token, data_source)`` in a thread-safe manner."""
